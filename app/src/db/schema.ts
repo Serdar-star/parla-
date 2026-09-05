@@ -29,6 +29,10 @@ export const users = sqliteTable(
     streakFreeze: integer("streak_freeze").notNull().default(1),
     coins: integer("coins").notNull().default(0),
     isPremium: integer("is_premium", { mode: "boolean" }).notNull().default(false),
+    isAdmin: integer("is_admin", { mode: "boolean" }).notNull().default(false),
+    premiumExpiresAt: integer("premium_expires_at", { mode: "timestamp" }),
+    subscriptionPlan: text("subscription_plan").notNull().default("free"),
+    stripeCustomerId: text("stripe_customer_id"),
     gamesPlayed: integer("games_played").notNull().default(0),
     bossKills: integer("boss_kills").notNull().default(0),
     passwordHash: text("password_hash").notNull(),
@@ -310,3 +314,158 @@ export const userSettings = sqliteTable("user_settings", {
   notifStreak: integer("notif_streak", { mode: "boolean" }).notNull().default(true),
   notifLeague: integer("notif_league", { mode: "boolean" }).notNull().default(false),
 });
+
+/* ═══════════════════════════ NOTIFICATIONS ═══════════════════════════ */
+export const notifications = sqliteTable(
+  "notifications",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: text("type").notNull(),
+    title: text("title").notNull(),
+    message: text("message").notNull(),
+    isRead: integer("is_read", { mode: "boolean" }).notNull().default(false),
+    data: text("data", { mode: "json" }).$type<Record<string, unknown> | null>(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().defaultNow(),
+  },
+  (t) => ({
+    userIdx: index("notifications_user_idx").on(t.userId),
+    readIdx: index("notifications_read_idx").on(t.userId, t.isRead),
+  })
+);
+
+/* ═══════════════════════════ DUELS ═══════════════════════════════════ */
+export const duels = sqliteTable(
+  "duels",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    challengerId: integer("challenger_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    opponentId: integer("opponent_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("pending"),
+    winnerId: integer("winner_id").references(() => users.id, { onDelete: "set null" }),
+    challengerScore: integer("challenger_score").notNull().default(0),
+    opponentScore: integer("opponent_score").notNull().default(0),
+    currentQuestion: integer("current_question").notNull().default(0),
+    questionsJson: text("questions_json", { mode: "json" }).$type<unknown[]>().notNull().default([]),
+    startedAt: integer("started_at", { mode: "timestamp" }),
+    finishedAt: integer("finished_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().defaultNow(),
+  },
+  (t) => ({
+    challengerIdx: index("duels_challenger_idx").on(t.challengerId),
+    opponentIdx: index("duels_opponent_idx").on(t.opponentId),
+    statusIdx: index("duels_status_idx").on(t.status),
+  })
+);
+
+export const duelAnswers = sqliteTable(
+  "duel_answers",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    duelId: integer("duel_id")
+      .notNull()
+      .references(() => duels.id, { onDelete: "cascade" }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    questionIndex: integer("question_index").notNull(),
+    answer: text("answer").notNull(),
+    isCorrect: integer("is_correct", { mode: "boolean" }).notNull().default(false),
+    timeTaken: integer("time_taken").notNull().default(0),
+    pointsEarned: integer("points_earned").notNull().default(0),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().defaultNow(),
+  },
+  (t) => ({
+    duelIdx: index("duel_answers_duel_idx").on(t.duelId),
+    userDuelIdx: uniqueIndex("duel_answers_user_q_idx").on(t.duelId, t.userId, t.questionIndex),
+  })
+);
+
+/* ═══════════════════════════ PUSH SUBSCRIPTIONS ══════════════════════ */
+export const pushSubscriptions = sqliteTable(
+  "push_subscriptions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().defaultNow(),
+  },
+  (t) => ({
+    userEndpointIdx: uniqueIndex("push_user_endpoint_idx").on(t.userId, t.endpoint),
+  })
+);
+
+/* ═══════════════════════════ SONGS ════════════════════════════════════ */
+export const songs = sqliteTable("songs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
+  artist: text("artist").notNull(),
+  language: text("language").notNull().default("en"),
+  lyricsJson: text("lyrics_json", { mode: "json" }).$type<{ line: string; tr: string; words: { word: string; meaning: string }[] }[]>().notNull(),
+  difficulty: text("difficulty").notNull().default("A2"),
+  genre: text("genre").notNull().default("pop"),
+  emoji: text("emoji").notNull().default("🎵"),
+  youtubeId: text("youtube_id"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().defaultNow(),
+});
+
+/* ═══════════════════════════ PODCASTS ═════════════════════════════════ */
+export const podcasts = sqliteTable("podcasts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  language: text("language").notNull().default("en"),
+  duration: integer("duration").notNull().default(300),
+  transcriptJson: text("transcript_json", { mode: "json" }).$type<{ time: number; text: string; tr: string }[]>().notNull(),
+  difficulty: text("difficulty").notNull().default("A2"),
+  category: text("category").notNull().default("general"),
+  emoji: text("emoji").notNull().default("🎙️"),
+  questionsJson: text("questions_json", { mode: "json" }).$type<{ q: string; options: string[]; answer: number }[]>().notNull().default([]),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().defaultNow(),
+});
+
+/* ═══════════════════════════ NEWS ARTICLES ════════════════════════════ */
+export const newsArticles = sqliteTable("news_articles", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
+  language: text("language").notNull().default("en"),
+  simpleContent: text("simple_content").notNull(),
+  mediumContent: text("medium_content").notNull(),
+  originalContent: text("original_content").notNull(),
+  category: text("category").notNull().default("world"),
+  emoji: text("emoji").notNull().default("📰"),
+  readingTime: integer("reading_time").notNull().default(3),
+  difficulty: text("difficulty").notNull().default("A2"),
+  questionsJson: text("questions_json", { mode: "json" }).$type<{ q: string; options: string[]; answer: number }[]>().notNull().default([]),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().defaultNow(),
+});
+
+/* ═══════════════════════════ PAYMENTS ═════════════════════════════════ */
+export const payments = sqliteTable(
+  "payments",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    stripePaymentId: text("stripe_payment_id").notNull(),
+    amount: integer("amount").notNull(),
+    currency: text("currency").notNull().default("usd"),
+    plan: text("plan").notNull().default("premium"),
+    status: text("status").notNull().default("succeeded"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().defaultNow(),
+  },
+  (t) => ({
+    userIdx: index("payments_user_idx").on(t.userId),
+  })
+);

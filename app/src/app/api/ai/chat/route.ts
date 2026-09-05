@@ -1,14 +1,22 @@
-import { eq } from "drizzle-orm";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
-import { aiConversations } from "@/db/schema";
+import { aiConversations, userLanguages } from "@/db/schema";
 import { handleApiError, requireUser } from "@/lib/auth";
+import { getGroqClient, ANA_MODEL, checkDailyLimit, buildTeacherSystemPrompt, groqWithRetry } from "@/lib/groq";
+import { rateLimit, getClientIp } from "@/lib/rate-limit";
+import { z } from "zod";
+
+const bodySchema = z.object({
+  message: z.string().min(1).max(2000),
+  mode: z.string().optional().default("serbest"),
+  stream: z.boolean().optional().default(false),
+});
 
 const MODES: Record<string, string> = {
-  serbest: "Serbest sohbet modu: Kullanıcıyla günlük konularda İngilizce sohbet et.",
+  serbest: "Serbest sohbet modu: Kullanıcıyla günlük konularda sohbet et.",
   gramer: "Gramer modu: Kullanıcının gramer sorularını basit ve net açıkla, örnek cümle ver.",
-  kelime: "Kelime modu: Kullanıcıya yeni İngilizce kelimeler öğret, örneklerle pekiştir.",
-  ceviri: "Çeviri modu: Kullanıcının Türkçe cümlelerini doğal İngilizceye çevir ve açıkla.",
+  kelime: "Kelime modu: Kullanıcıya yeni kelimeler öğret, örneklerle pekiştir.",
+  ceviri: "Çeviri modu: Kullanıcının Türkçe cümlelerini doğal şekilde çevir ve açıkla.",
 };
 
 function fallbackReply(message: string, mode: string): string {
@@ -27,48 +35,137 @@ function fallbackReply(message: string, mode: string): string {
 export async function POST(req: Request) {
   try {
     const user = await requireUser();
-    const body = (await req.json().catch(() => ({}))) as { message?: string; mode?: string };
-    const message = body.message?.trim();
-    const mode = body.mode ?? "serbest";
-    if (!message) return Response.json({ error: "Mesaj boş olamaz." }, { status: 400 });
 
-    await db.insert(aiConversations).values({ userId: user.id, languageCode: "en", role: "user", content: message });
-
-    let reply = "";
-    const key = process.env.GEMINI_API_KEY;
-    if (key) {
-      try {
-        const genAI = new GoogleGenerativeAI(key);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-        const history = await db
-          .select()
-          .from(aiConversations)
-          .where(eq(aiConversations.userId, user.id))
-          .orderBy(aiConversations.id)
-          .limit(12);
-        const prompt = [
-          "Sen Parla adlı dil öğrenme uygulamasının sabırlı ve motive edici İngilizce öğretmeni 'Lumen'sin.",
-          "Kullanıcı Türkçe konuşan bir A2 seviye öğrenci. Görevin: seviyeye uygun konuşmak, hataları nazikçe düzeltip nedenini açıklamak, grameri basit anlatmak, kullanıcıyı İngilizce konuşturmak.",
-          MODES[mode] ?? MODES.serbest,
-          "Kurallar: Kısa ve samimi ol (2-4 cümle). Varsa kullanıcının hatasını düzelt. Her mesajın SONUNDA kullanıcıyı konuşturacak bir soru sor. Türkçe ve İngilizceyi harmanlayabilirsin.",
-          "Önceki konuşma:",
-          ...history.slice(0, -1).map((h) => `${h.role === "user" ? "Öğrenci" : "Lumen"}: ${h.content}`),
-          `Öğrenci: ${message}`,
-          "Lumen:",
-        ].join("\n");
-        const result = await model.generateContent(prompt);
-        reply = result.response.text().trim();
-      } catch {
-        reply = fallbackReply(message, mode);
-      }
-    } else {
-      // Gemini anahtarı yoksa kural tabanlı öğretmen devreye girer
-      await new Promise((r) => setTimeout(r, 400));
-      reply = fallbackReply(message, mode);
+    // Rate limiting per IP + user
+    const ip = getClientIp(req);
+    const rl = rateLimit(`ai-chat:${user.id}:${ip}`, 30, 60_000);
+    if (!rl.allowed) {
+      return Response.json({ error: "Çok fazla istek, biraz bekle." }, { status: 429 });
     }
 
-    await db.insert(aiConversations).values({ userId: user.id, languageCode: "en", role: "assistant", content: reply });
-    return Response.json({ reply, mode, usedAI: Boolean(key) });
+    const body = await req.json().catch(() => ({}));
+    const parsed = bodySchema.safeParse(body);
+    if (!parsed.success) {
+      return Response.json({ error: "Geçersiz istek", details: parsed.error.issues }, { status: 400 });
+    }
+    const { message, mode, stream } = parsed.data;
+    const trimmed = message.trim();
+    if (!trimmed) return Response.json({ error: "Mesaj boş olamaz." }, { status: 400 });
+
+    // Daily limit check
+    const limitCheck = checkDailyLimit(user.id, !!user.isPremium);
+    if (!limitCheck.allowed) {
+      return Response.json({ error: "Günlük limitin doldu, premium'a geç veya yarın tekrar dene.", limit: true }, { status: 429 });
+    }
+
+    // Get user language info
+    let targetLang = user.currentLanguage || "en";
+    let cefr = "A2";
+    try {
+      const langRows = await db.select().from(userLanguages).where(and(eq(userLanguages.userId, user.id), eq(userLanguages.languageCode, targetLang))).limit(1);
+      if (langRows[0]) cefr = langRows[0].cefrLevel || "A2";
+    } catch {}
+
+    // Save user message
+    await db.insert(aiConversations).values({ userId: user.id, languageCode: targetLang, role: "user", content: trimmed });
+
+    // Get recent history (last 12)
+    let history: { role: string; content: string }[] = [];
+    try {
+      const rows = await db.select().from(aiConversations).where(eq(aiConversations.userId, user.id)).orderBy(desc(aiConversations.id)).limit(12);
+      history = rows.reverse().map((r) => ({ role: r.role === "user" ? "user" : "assistant", content: r.content }));
+    } catch {}
+
+    const systemPrompt = buildTeacherSystemPrompt(targetLang, cefr) + "\n" + (MODES[mode] ?? MODES.serbest);
+
+    const groqKey = process.env.GROQ_API_KEY;
+    const useStreaming = stream || req.headers.get("accept")?.includes("text/event-stream");
+
+    if (!groqKey) {
+      const reply = fallbackReply(trimmed, mode);
+      await db.insert(aiConversations).values({ userId: user.id, languageCode: targetLang, role: "assistant", content: reply });
+      if (useStreaming) {
+        const encoder = new TextEncoder();
+        const readable = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(reply));
+            controller.close();
+          },
+        });
+        return new Response(readable, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      }
+      return Response.json({ reply, mode, usedAI: false, remaining: limitCheck.remaining });
+    }
+
+    // Try Groq with retry
+    try {
+      const client = getGroqClient();
+      const messages: any[] = [{ role: "system", content: systemPrompt }, ...history.slice(-10), { role: "user", content: trimmed }];
+
+      if (useStreaming) {
+        const streamResp = await groqWithRetry(() =>
+          client.chat.completions.create({
+            model: ANA_MODEL,
+            messages,
+            temperature: 0.7,
+            max_tokens: 800,
+            stream: true,
+          })
+        );
+
+        let fullReply = "";
+        const encoder = new TextEncoder();
+        const readable = new ReadableStream({
+          async start(controller) {
+            try {
+              for await (const chunk of streamResp as any) {
+                const delta = chunk.choices?.[0]?.delta?.content || "";
+                if (delta) {
+                  fullReply += delta;
+                  controller.enqueue(encoder.encode(delta));
+                }
+              }
+              controller.close();
+              // Save after stream ends
+              if (fullReply.trim()) {
+                await db.insert(aiConversations).values({ userId: user.id, languageCode: targetLang, role: "assistant", content: fullReply.trim() });
+              }
+            } catch (e) {
+              controller.error(e);
+            }
+          },
+        });
+
+        return new Response(readable, {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-cache",
+            "X-Remaining": String(limitCheck.remaining),
+          },
+        });
+      } else {
+        const completion = await groqWithRetry(() =>
+          client.chat.completions.create({
+            model: ANA_MODEL,
+            messages,
+            temperature: 0.7,
+            max_tokens: 800,
+          })
+        );
+        const reply = (completion as any).choices?.[0]?.message?.content?.trim() || fallbackReply(trimmed, mode);
+        await db.insert(aiConversations).values({ userId: user.id, languageCode: targetLang, role: "assistant", content: reply });
+        return Response.json({ reply, mode, usedAI: true, remaining: limitCheck.remaining });
+      }
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      if (msg.includes("429") || msg.toLowerCase().includes("rate limit")) {
+        return Response.json({ error: "AI şu an çok meşgul, biraz sonra tekrar dene" }, { status: 429 });
+      }
+      console.error("Groq chat error", err);
+      const reply = fallbackReply(trimmed, mode);
+      await db.insert(aiConversations).values({ userId: user.id, languageCode: targetLang, role: "assistant", content: reply });
+      return Response.json({ reply, mode, usedAI: false, fallback: true, remaining: limitCheck.remaining });
+    }
   } catch (err) {
     return handleApiError(err);
   }

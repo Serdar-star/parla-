@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Bell,
   Check,
+  Crown,
   Database,
   Download,
   Eye,
@@ -37,6 +38,7 @@ import { cn, fireConfetti, playTone, speak } from "@/lib/utils";
 
 const sections = [
   { id: "hesap", label: "Hesap", icon: UserRound, desc: "Profil, güvenlik, bağlantılar", color: "#58cc02" },
+  { id: "abonelik", label: "Abonelik", icon: Crown, desc: "Plan, fatura, iptal", color: "#ffc800" },
   { id: "gorunum", label: "Görünüm", icon: Palette, desc: "Tema ve yazı tipi", color: "#9b5cff" },
   { id: "ogrenme", label: "Öğrenme", icon: GraduationCap, desc: "Hedefler, sesler, kutlamalar", color: "#1cb0f6" },
   { id: "bildirim", label: "Bildirimler", icon: Bell, desc: "Hatırlatmalar", color: "#ff9600" },
@@ -387,6 +389,48 @@ export default function SettingsPage() {
               </>
             )}
 
+            {/* ═══════════════════════════ ABONELİK ═════════════════════════ */}
+            {section === "abonelik" && (
+              <Card className="p-7">
+                <SectionTitle icon={Crown} title="Abonelik" desc="Mevcut planın, faturalandırma ve iptal." color={current.color} />
+                <div className="mt-6 rounded-2xl border-2 border-gold/40 bg-goldsoft/50 p-5">
+                  <div className="flex items-center gap-3">
+                    <span className="flex size-12 items-center justify-center rounded-2xl bg-gold text-2xl">👑</span>
+                    <div>
+                      <p className="font-display text-lg font-bold text-ink">{wallet.isSuper ? "Premium Aktif" : "Ücretsiz Plan"}</p>
+                      <p className="text-xs font-semibold text-mut">
+                        {wallet.isSuper ? "Sınırsız can, AI ve çevrimdışı açık" : "Günde 3 ders · 20 AI mesajı"}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-xs font-bold text-mut">Sonraki ödeme: {wallet.isSuper ? "30 gün sonra" : "—"}</p>
+                </div>
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <Button variant="gold" href="/pricing">
+                    Planı Değiştir
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      void fetch("/api/payment/create-portal", { method: "POST" })
+                        .then((r) => r.json())
+                        .then((d) => {
+                          if (d.url) window.location.href = d.url;
+                          else toast("Portal açılamadı", { type: "warning" });
+                        })
+                        .catch(() => toast("Portal açılamadı", { type: "error" }));
+                    }}
+                  >
+                    Aboneliği Yönet
+                  </Button>
+                </div>
+                <Button className="mt-3" variant="outline" href="/settings/downloads">
+                  <Download className="size-4" /> Çevrimdışı İndirmeler
+                </Button>
+                <p className="mt-4 text-xs font-semibold text-mut">30 gün iade garantisi · Stripe ile güvenli ödeme</p>
+              </Card>
+            )}
+
             {/* ═══════════════════════════ GÖRÜNÜM ═════════════════════════ */}
             {section === "gorunum" && (
               <Card className="p-7">
@@ -729,6 +773,9 @@ export default function SettingsPage() {
                     </Button>
                     <Button variant="outline" size="lg" onClick={() => toast("Bulut yedeği alındı ☁️", { desc: "İlerlemen güvende.", type: "info" })}>
                       <HardDrive className="size-4.5" /> Buluta Yedekle
+                    </Button>
+                    <Button variant="soft" size="lg" href="/settings/downloads">
+                      <Download className="size-4.5" /> Çevrimdışı Dersler
                     </Button>
                   </div>
                 </Card>

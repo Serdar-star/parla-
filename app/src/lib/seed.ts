@@ -10,10 +10,18 @@ import {
   achievements,
   aiConversations,
   dailyActivity,
+  duelAnswers,
+  duels,
   favorites,
   friendships,
   leagues,
   lessons,
+  newsArticles,
+  notifications,
+  payments,
+  podcasts,
+  pushSubscriptions,
+  songs,
   tasks,
   userAchievements,
   userLanguages,
@@ -25,6 +33,7 @@ import {
   vocabulary,
 } from "../db/schema";
 import { levelFromXp, weekStartStr } from "./rules";
+import { NEWS, PODCASTS, SONGS } from "../data/content";
 
 /* ─────────────────────────── KELİME BANKASI ─────────────────────────── */
 /* [İngilizce, Türkçe, Fonetik, Kategori, Emoji] */
@@ -536,6 +545,11 @@ function buildLessonContent(lessonWords: WordRef[], allWords: WordRef[], seed: n
 async function main() {
   console.log("🧹 Tablolar temizleniyor...");
   // SQLite/libSQL TRUNCATE desteklemez — FK sırasıyla satır satır temizle.
+  await db.delete(duelAnswers);
+  await db.delete(duels);
+  await db.delete(notifications);
+  await db.delete(pushSubscriptions);
+  await db.delete(payments);
   await db.delete(aiConversations);
   await db.delete(userAchievements);
   await db.delete(userLessons);
@@ -547,10 +561,12 @@ async function main() {
   await db.delete(friendships);
   await db.delete(leagues);
   await db.delete(dailyActivity);
-  await db.delete(userAchievements);
   await db.delete(achievements);
   await db.delete(tasks);
   await db.delete(lessons);
+  await db.delete(songs);
+  await db.delete(podcasts);
+  await db.delete(newsArticles);
   await db.delete(vocabulary);
   await db.delete(users);
 
@@ -714,6 +730,9 @@ async function main() {
           lastActivity: new Date().toISOString().slice(0, 10),
           coins: 100,
           passwordHash,
+          isAdmin: i === 0,
+          isPremium: i < 3,
+          subscriptionPlan: i === 0 ? "pro" : i < 3 ? "premium" : "free",
         };
       })
     )
@@ -740,11 +759,82 @@ async function main() {
   // Sahte kullanıcılara dil kaydı + birkaç tamamlanmış ders
   await db.insert(userLanguages).values(mockUserRows.map((u) => ({ userId: u.id, languageCode: "en", cefrLevel: u.level > 10 ? "B1" : "A2", totalXp: u.xp, lessonsCompleted: Math.min(15, u.level), wordsLearned: u.level * 12 })));
 
+  /* ── 6. İÇERİK (şarkı, podcast, haber) ── */
+  console.log("🎵 İçerik ekleniyor...");
+  await db.insert(songs).values(
+    SONGS.map((s) => ({
+      title: s.title,
+      artist: s.artist,
+      language: s.language,
+      lyricsJson: s.lyrics,
+      difficulty: s.difficulty,
+      genre: s.genre,
+      emoji: s.emoji,
+      youtubeId: s.youtubeId || null,
+    }))
+  );
+  await db.insert(podcasts).values(
+    PODCASTS.map((p) => ({
+      title: p.title,
+      description: p.description,
+      language: p.language,
+      duration: p.duration,
+      transcriptJson: p.transcript,
+      difficulty: p.difficulty,
+      category: p.category,
+      emoji: p.emoji,
+      questionsJson: p.questions,
+    }))
+  );
+  await db.insert(newsArticles).values(
+    NEWS.map((n) => ({
+      title: n.title,
+      language: n.language,
+      simpleContent: n.simple,
+      mediumContent: n.medium,
+      originalContent: n.original,
+      category: n.category,
+      emoji: n.emoji,
+      readingTime: n.readingTime,
+      difficulty: n.difficulty,
+      questionsJson: n.questions,
+    }))
+  );
+
+  // Demo bildirimler (ilk kullanıcıya)
+  if (mockUserRows[0]) {
+    await db.insert(notifications).values([
+      {
+        userId: mockUserRows[0].id,
+        type: "streak_reminder",
+        title: "Serini kaybetme! 🔥",
+        message: "Bugün henüz ders yapmadın. Serini koru!",
+        data: {},
+      },
+      {
+        userId: mockUserRows[0].id,
+        type: "achievement",
+        title: "Yeni rozet kazandın!",
+        message: "İlk Adım rozetini açtın 🎯",
+        data: {},
+      },
+      {
+        userId: mockUserRows[0].id,
+        type: "weekly_report",
+        title: "Haftalık rapor hazır 📊",
+        message: "Bu hafta harika gitti! Rapora göz at.",
+        data: {},
+      },
+    ]);
+  }
+
   console.log("🌟 Seed tamamlandı!");
   console.log(`   • ${WORDS.length} kelime`);
   console.log(`   • ${lessonIds.length} ders`);
   console.log(`   • 32 başarım`);
   console.log(`   • ${mockUserRows.length} sahte kullanıcı + ligler`);
+  console.log(`   • ${SONGS.length} şarkı · ${PODCASTS.length} podcast · ${NEWS.length} haber`);
+  console.log(`   • Admin: ${mockUserRows[0]?.email} (demo1234)`);
   process.exit(0);
 }
 

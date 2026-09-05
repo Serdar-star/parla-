@@ -6,27 +6,36 @@ import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   Award,
+  Bell,
   BookOpen,
   Bot,
+  Camera,
   Crown,
   Diamond,
   Flame,
   Gamepad2,
+  Headphones,
   Heart,
+  HelpCircle,
   Languages,
   LayoutDashboard,
   Map,
   Moon,
+  Music2,
+  Newspaper,
   Repeat,
   Settings,
   ShoppingBag,
   Snowflake,
   Sparkles,
   Sun,
+  Swords,
+  Theater,
   Trophy,
   User,
   Users,
   Zap,
+  BarChart3,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useEffect } from "react";
@@ -44,12 +53,22 @@ export const navItems: NavItem[] = [
   { href: "/stories", label: "Hikayeler", icon: Sparkles, badge: "YENİ" },
   { href: "/review", label: "Tekrar", icon: Repeat },
   { href: "/ai-teacher", label: "AI Öğretmen", icon: Bot },
+  { href: "/roleplay", label: "Roleplay", icon: Theater, badge: "YENİ" },
   { href: "/games", label: "Oyunlar", icon: Gamepad2 },
+  { href: "/duel", label: "Düello", icon: Swords },
+  { href: "/music", label: "Müzik", icon: Music2 },
+  { href: "/podcast", label: "Podcast", icon: Headphones },
+  { href: "/news", label: "Haber", icon: Newspaper },
+  { href: "/camera", label: "Kamera", icon: Camera },
+  { href: "/report", label: "Rapor", icon: BarChart3 },
   { href: "/premium", label: "Süper", icon: Crown, gold: true },
+  { href: "/pricing", label: "Fiyatlar", icon: Crown, gold: true },
   { href: "/dictionary", label: "Sözlük", icon: BookOpen },
   { href: "/leaderboard", label: "Sıralama", icon: Trophy },
   { href: "/friends", label: "Arkadaşlar", icon: Users },
+  { href: "/notifications", label: "Bildirimler", icon: Bell },
   { href: "/achievements", label: "Başarımlar", icon: Award },
+  { href: "/help", label: "Yardım", icon: HelpCircle },
   { href: "/profile", label: "Profil", icon: User },
   { href: "/settings", label: "Ayarlar", icon: Settings },
 ];
@@ -298,6 +317,108 @@ function ShopModal({ open, onClose }: { open: boolean; onClose: () => void }) {
 
 /* --------------------------------- Status bar -------------------------------- */
 
+function NotifBell() {
+  const [count, setCount] = useState(0);
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<{ id: number; title: string; message: string; type: string; isRead: boolean }[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/notifications", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setCount(data.unreadCount || 0);
+        setItems((data.notifications || []).slice(0, 6));
+      } catch {
+        /* ignore */
+      }
+    };
+    void load();
+    const t = setInterval(load, 60000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+
+  const markAll = async () => {
+    try {
+      await fetch("/api/notifications/read-all", { method: "PUT" });
+      setCount(0);
+      setItems((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-label="Bildirimler"
+        className="relative flex size-10 cursor-pointer items-center justify-center rounded-xl border-2 border-line bg-surface text-mut shadow-[0_3px_0_var(--line)] transition-all hover:text-ink active:translate-y-[3px] active:shadow-none"
+      >
+        <Bell className="size-5" />
+        {count > 0 && (
+          <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-extrabold text-white">
+            {count > 9 ? "9+" : count}
+          </span>
+        )}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-50 mt-2 w-80 overflow-hidden rounded-2xl border-2 border-line bg-surface shadow-pop">
+            <div className="flex items-center justify-between border-b-2 border-line px-4 py-3">
+              <p className="font-display text-sm font-bold text-ink">Bildirimler</p>
+              {count > 0 && (
+                <button onClick={() => void markAll()} className="cursor-pointer text-[10px] font-extrabold uppercase text-primary hover:underline">
+                  Tümünü okundu
+                </button>
+              )}
+            </div>
+            <div className="max-h-72 overflow-y-auto">
+              {items.length === 0 && <p className="p-4 text-center text-xs font-bold text-mut">Bildirim yok</p>}
+              {items.map((n) => (
+                <Link key={n.id} href="/notifications" onClick={() => setOpen(false)} className={cn("block border-b border-line/60 px-4 py-3 hover:bg-raise", !n.isRead && "bg-azuresoft/30")}>
+                  <p className="text-sm font-extrabold text-ink">{n.title}</p>
+                  <p className="mt-0.5 line-clamp-1 text-xs font-semibold text-mut">{n.message}</p>
+                </Link>
+              ))}
+            </div>
+            <Link href="/notifications" onClick={() => setOpen(false)} className="block border-t-2 border-line px-4 py-3 text-center text-xs font-extrabold text-primary hover:underline">
+              Tüm bildirimler →
+            </Link>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function OfflineBanner() {
+  const [offline, setOffline] = useState(false);
+  useEffect(() => {
+    const sync = () => setOffline(!navigator.onLine);
+    sync();
+    window.addEventListener("online", sync);
+    window.addEventListener("offline", sync);
+    return () => {
+      window.removeEventListener("online", sync);
+      window.removeEventListener("offline", sync);
+    };
+  }, []);
+  if (!offline) return null;
+  return (
+    <div className="mb-4 flex items-center gap-2 rounded-2xl border-2 border-gold/40 bg-goldsoft px-4 py-2.5 text-xs font-extrabold text-gold">
+      📡 Çevrimdışı moddasın. Sadece indirilen içeriklere erişebilirsin.
+    </div>
+  );
+}
+
 function StatusBar({ compact = false }: { compact?: boolean }) {
   const { wallet } = useApp();
   const [streakOpen, setStreakOpen] = useState(false);
@@ -309,6 +430,7 @@ function StatusBar({ compact = false }: { compact?: boolean }) {
         <StatChip title="Günlük seri" icon={<Flame className="size-4.5 text-accent" />} value={user.streak} onClick={() => setStreakOpen(true)} />
         <StatChip title="Elmaslar" icon={<Diamond className="size-4.5 fill-azure text-azure" />} value={wallet.gems} onClick={() => setShopOpen(true)} />
         <StatChip title={wallet.isSuper ? "Süper: sınırsız can" : "Canlar"} icon={wallet.isSuper ? <Crown className="size-4.5 fill-gold text-gold" /> : <Heart className="size-4.5 fill-danger text-danger" />} value={wallet.isSuper ? "∞" : wallet.hearts} onClick={() => setShopOpen(true)} />
+        {!compact && <NotifBell />}
         <ThemeToggle />
       </div>
       <StreakModal open={streakOpen} onClose={() => setStreakOpen(false)} />
@@ -447,6 +569,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="mb-5 hidden justify-end lg:flex">
           <StatusBar />
         </div>
+        <OfflineBanner />
         {children}
       </main>
     </div>
