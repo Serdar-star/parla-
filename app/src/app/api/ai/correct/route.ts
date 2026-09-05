@@ -1,5 +1,6 @@
 import { handleApiError, requireUser } from "@/lib/auth";
-import { getGroqClient, HIZLI_MODEL, groqWithRetry } from "@/lib/groq";
+import { getGroqClient, HIZLI_MODEL, groqWithRetry, GROQ_API_KEY } from "@/lib/groq";
+import { localCorrect, probeGroq } from "@/lib/ai-local";
 import { rateLimit, getClientIp } from "@/lib/rate-limit";
 import { z } from "zod";
 
@@ -20,48 +21,35 @@ export async function POST(req: Request) {
     if (!parsed.success) return Response.json({ error: "Geçersiz istek" }, { status: 400 });
 
     const { text, targetLang } = parsed.data;
+    const groqUp = Boolean(GROQ_API_KEY) && (await probeGroq(3000));
 
-    const systemPrompt = `Sen bir ${targetLang} dil bilgisi uzmanısın. Kullanıcının yazdığı metni analiz et.
-Görev:
-1. Gramer hatalarını bul
-2. Düzeltilmiş versiyonu ver
-3. Her hatanın neden yanlış olduğunu Türkçe açıkla
-4. Daha iyi alternatif cümle öner
-JSON formatında dön:
-{
-  "original": "orijinal metin",
-  "corrected": "düzeltilmiş metin",
-  "errors": [{"error": "hatalı kısım", "correction": "doğrusu", "explanation": "açıklama"}],
-  "alternative": "daha doğal alternatif"
-}`;
-
-    try {
-      const client = getGroqClient();
-      const completion = await groqWithRetry(() =>
-        client.chat.completions.create({
-          model: HIZLI_MODEL,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: text },
-          ],
-          temperature: 0.2,
-          max_tokens: 800,
-        })
-      );
-      let raw = (completion as any).choices?.[0]?.message?.content || "";
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          const j = JSON.parse(jsonMatch[0]);
-          return Response.json(j);
-        } catch {}
+    if (groqUp) {
+      try {
+        const systemPrompt = `Sen bir ${targetLang} dil bilgisi uzmanısın. JSON döndür:
+{"original":"...","corrected":"...","errors":[{"error":"...","correction":"...","explanation":"..."}],"alternative":"..."}`;
+        const client = getGroqClient();
+        const completion = await groqWithRetry(() =>
+          client.chat.completions.create({
+            model: HIZLI_MODEL,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: text },
+            ],
+            temperature: 0.2,
+            max_tokens: 800,
+          })
+        );
+        let raw = completion.choices?.[0]?.message?.content || "";
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        if (jsonMatch) return Response.json({ ...JSON.parse(jsonMatch[0]), provider: "groq" });
+        return Response.json({ original: text, corrected: raw, errors: [], alternative: raw, provider: "groq" });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "";
+        if (msg.includes("429")) return Response.json({ error: "AI şu an çok meşgul, biraz sonra tekrar dene" }, { status: 429 });
       }
-      return Response.json({ original: text, corrected: raw, errors: [], alternative: raw });
-    } catch (err: any) {
-      if (String(err?.message).includes("429")) return Response.json({ error: "AI şu an çok meşgul, biraz sonra tekrar dene" }, { status: 429 });
-      console.error("Correct error", err);
-      return Response.json({ original: text, corrected: text, errors: [], alternative: text });
     }
+
+    return Response.json({ ...localCorrect(text), provider: "local" });
   } catch (err) {
     return handleApiError(err);
   }
