@@ -406,7 +406,7 @@ export default function SettingsPage() {
                   <p className="mt-3 text-xs font-bold text-mut">Sonraki ödeme: {wallet.isSuper ? "30 gün sonra" : "—"}</p>
                 </div>
                 <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                  <Button variant="gold" href="/pricing">
+                  <Button variant="gold" href="/premium">
                     Planı Değiştir
                   </Button>
                   <Button

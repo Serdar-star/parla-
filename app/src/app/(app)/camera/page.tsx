@@ -106,7 +106,7 @@ export default function CameraPage() {
           <Crown className="mx-auto size-12 text-gold" />
           <h1 className="mt-4 font-display text-2xl font-bold text-ink">Premium özellik</h1>
           <p className="mt-2 text-sm font-semibold text-mut">Kamera ile nesne tanıma Premium/Pro planına özel. Hemen yükselt ve tüm özelliklere eriş.</p>
-          <Button className="mt-6" variant="gold" href="/pricing">
+          <Button className="mt-6" variant="gold" href="/premium">
             Premium&apos;a Geç 👑
           </Button>
         </Card>

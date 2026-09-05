@@ -45,7 +45,7 @@ export async function POST(req: Request) {
         },
       ],
       success_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/payment/success?session_id={CHECKOUT_SESSION_ID}&plan=${plan}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/pricing?canceled=1`,
+      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/premium?canceled=1`,
       metadata: { userId: String(user.id), plan, billing },
     });
 

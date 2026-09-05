@@ -62,7 +62,6 @@ export const navItems: NavItem[] = [
   { href: "/camera", label: "Kamera", icon: Camera },
   { href: "/report", label: "Rapor", icon: BarChart3 },
   { href: "/premium", label: "Süper", icon: Crown, gold: true },
-  { href: "/pricing", label: "Fiyatlar", icon: Crown, gold: true },
   { href: "/dictionary", label: "Sözlük", icon: BookOpen },
   { href: "/leaderboard", label: "Sıralama", icon: Trophy },
   { href: "/friends", label: "Arkadaşlar", icon: Users },

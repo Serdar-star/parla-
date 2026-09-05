@@ -11,7 +11,7 @@ export async function POST() {
 
     if (secretKey.includes("Example") || secretKey.startsWith("sk_test_51Hx") || !user.stripeCustomerId) {
       return Response.json({
-        url: "/pricing",
+        url: "/premium",
         mock: true,
         message: "Test modunda müşteri portalı yerine fiyatlandırma sayfasına yönlendiriliyorsun.",
       });
