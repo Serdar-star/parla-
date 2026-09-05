@@ -6,8 +6,8 @@ import { BookOpen, Check, GraduationCap, Languages, MessageSquareText, Mic, Send
 import { Badge, useToast } from "@/components/ui";
 import { useApp } from "@/stores/app";
 import { postJson } from "@/lib/api";
-import { cn, fireConfetti, greeting, seeded } from "@/lib/utils";
-
+import { buildChatMessages, groqBrowserChat, loadGroqBridge, type BridgeConfig } from "@/lib/groq-browser";
+import { cn, fireConfetti, greeting } from "@/lib/utils";
 /* ══════════════════════════════ LUMEN AVATAR ═════════════════════════════ */
 
 type LumenMood = "idle" | "happy" | "thinking" | "listening";
@@ -208,9 +208,11 @@ export default function AiTeacherPage() {
   const [recording, setRecording] = useState(false);
   const [userTurns, setUserTurns] = useState(0);
   const [scenarioDone, setScenarioDone] = useState<string[]>([]);
+  const [aiProvider, setAiProvider] = useState<"groq" | "local" | "checking">("checking");
   const endRef = useRef<HTMLDivElement>(null);
   const idRef = useRef(1);
   const goalRewarded = useRef(false);
+  const bridgeRef = useRef<BridgeConfig | null>(null);
 
   const goalPct = Math.min(100, userTurns * 20);
   const lumenMood: LumenMood = recording ? "listening" : typing ? "thinking" : goalPct >= 100 ? "happy" : "idle";
@@ -219,6 +221,41 @@ export default function AiTeacherPage() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing]);
 
+  // Groq tarayıcı köprüsünü yükle (sandbox sunucu engelli olsa bile tarayıcı ağı çalışır)
+  useEffect(() => {
+    let cancelled = false;
+    loadGroqBridge(true)
+      .then(async (bridge) => {
+        if (cancelled) return;
+        bridgeRef.current = bridge;
+        if (!bridge.enabled || !bridge.apiKey) {
+          setAiProvider("local");
+          return;
+        }
+        // Hızlı canlılık testi — tarayıcıdan api.groq.com
+        try {
+          const test = await groqBrowserChat({
+            bridge,
+            messages: [
+              { role: "system", content: "Reply with exactly: OK" },
+              { role: "user", content: "ping" },
+            ],
+            model: bridge.fastModel || bridge.model,
+            maxTokens: 8,
+            temperature: 0,
+          });
+          if (!cancelled) setAiProvider(test.reply ? "groq" : "local");
+        } catch {
+          if (!cancelled) setAiProvider("local");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAiProvider("local");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   useEffect(() => {
     if (goalPct >= 100 && !goalRewarded.current) {
       goalRewarded.current = true;
@@ -262,22 +299,57 @@ export default function AiTeacherPage() {
       return;
     }
 
-    // Gerçek AI sohbeti — /api/ai/chat (Gemini ya da yedek öğretmen)
+    // 1) Tarayıcı → Groq (sandbox TLS engelini aşar)
+    // 2) Sunucu /api/ai/chat
+    // 3) Yerel yedek öğretmen
     setTyping(true);
-    postJson<{ reply: string }>("/api/ai/chat", { message: text, mode: mode.id })
-      .then((data) => {
+    (async () => {
+      const historyForAi = messages
+        .filter((m) => !m.scene && !m.quiz)
+        .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("ai" as const), content: m.text }));
+
+      // Browser Groq
+      try {
+        let bridge = bridgeRef.current;
+        if (!bridge) {
+          bridge = await loadGroqBridge();
+          bridgeRef.current = bridge;
+        }
+        if (bridge.enabled && bridge.apiKey) {
+          const chatMsgs = buildChatMessages(bridge.systemPrompt || "Sen sabırlı bir dil öğretmenisin.", mode.id, historyForAi, text);
+          const { reply } = await groqBrowserChat({ bridge, messages: chatMsgs });
+          setTyping(false);
+          setAiProvider("groq");
+          idRef.current += 1;
+          setMessages((m) => [...m, { id: idRef.current, role: "ai", text: reply }]);
+          return;
+        }
+      } catch (err) {
+        console.warn("Groq browser bridge failed, falling back:", err);
+      }
+
+      // Server path
+      try {
+        const data = await postJson<{ reply: string; provider?: string; usedAI?: boolean }>("/api/ai/chat", {
+          message: text,
+          mode: mode.id,
+        });
         setTyping(false);
+        if (data.provider === "groq") setAiProvider("groq");
         idRef.current += 1;
         setMessages((m) => [...m, { id: idRef.current, role: "ai", text: data.reply }]);
-      })
-      .catch(() => {
-        setTyping(false);
-        const fallback = aiReply(text, mode.id, null, userTurns, 0);
-        idRef.current += 1;
-        setMessages((m) => [...m, { id: idRef.current, role: "ai", text: fallback.text, correction: fallback.correction }]);
-      });
-  };
+        return;
+      } catch {
+        /* fall through */
+      }
 
+      setTyping(false);
+      setAiProvider("local");
+      const fallback = aiReply(text, mode.id, null, userTurns, 0);
+      idRef.current += 1;
+      setMessages((m) => [...m, { id: idRef.current, role: "ai", text: fallback.text, correction: fallback.correction }]);
+    })();
+  };
   const answerQuiz = (msg: ChatMsg, optionIdx: number) => {
     if (!msg.quiz || msg.quiz.resolved) return;
     const ok = optionIdx === msg.quiz.answer;
@@ -338,11 +410,25 @@ export default function AiTeacherPage() {
             <div>
               <p className="flex items-center gap-2 font-display text-base font-semibold text-ink">
                 Lumen <Badge tone="violet">AI Öğretmen</Badge>
+                {aiProvider === "groq" ? (
+                  <Badge tone="gold">Groq ●</Badge>
+                ) : aiProvider === "checking" ? (
+                  <Badge tone="violet">Bağlanıyor…</Badge>
+                ) : (
+                  <Badge tone="azure">Yerel</Badge>
+                )}
               </p>
               <p className="text-xs font-bold text-primary">
-                {recording ? "🎙️ Dinliyorum..." : typing ? "✍️ Düşünüyor..." : "● Çevrimiçi · Sonsuz sabır modu"}
-              </p>
-            </div>
+                {recording
+                  ? "🎙️ Dinliyorum..."
+                  : typing
+                    ? "✍️ Düşünüyor..."
+                    : aiProvider === "groq"
+                      ? "● Groq AI aktif · Llama"
+                      : aiProvider === "checking"
+                        ? "● Groq bağlantısı kontrol ediliyor…"
+                        : "● Çevrimiçi · Yerel motor"}
+              </p>            </div>
           </div>
           <div className="hidden items-center gap-3 sm:flex">
             <div className="w-32">

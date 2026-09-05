@@ -2,12 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { HelpCircle, Lightbulb, Mic, Send, Swords, X } from "lucide-react";
-import { Badge, Button, Card, ProgressRing, useToast } from "@/components/ui";
+import { Lightbulb, Send, X } from "lucide-react";
+import { Button, ProgressRing, useToast } from "@/components/ui";
 import { postJson } from "@/lib/api";
 import { ROLEPLAY_CHARACTERS } from "@/lib/groq-client";
+import { groqBrowserChat, loadGroqBridge, type BridgeConfig } from "@/lib/groq-browser";
 import { cn, fireConfetti } from "@/lib/utils";
-
 type Char = {
   id: string;
   name: string;
@@ -40,10 +40,62 @@ export default function RoleplayPage() {
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const bridgeRef = useRef<BridgeConfig | null>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing]);
+
+  useEffect(() => {
+    loadGroqBridge(true)
+      .then((b) => {
+        bridgeRef.current = b;
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const roleplayViaBrowser = async (
+    character: Char,
+    action: "start" | "message",
+    message?: string,
+    history?: Msg[]
+  ): Promise<string | null> => {
+    try {
+      let bridge = bridgeRef.current;
+      if (!bridge) {
+        bridge = await loadGroqBridge();
+        bridgeRef.current = bridge;
+      }
+      if (!bridge.enabled || !bridge.apiKey) return null;
+
+      const system =
+        action === "start"
+          ? `Sen ${character.name} karakterisin (${character.scenario}). Kısa, doğal ve karaktere uygun ilk mesajı yaz. İngilizce konuş. 2-3 cümle.`
+          : `Sen ${character.name} karakterisin (${character.scenario}). Karaktere sadık kal, kısa ve doğal konuş (2-3 cümle). İngilizce yanıt ver.`;
+
+      const msgs: { role: "system" | "user" | "assistant"; content: string }[] = [{ role: "system", content: system }];
+      if (history) {
+        for (const h of history.slice(-12)) {
+          msgs.push({ role: h.role === "user" ? "user" : "assistant", content: h.content });
+        }
+      }
+      if (action === "message" && message) {
+        // already in history last
+      } else if (action === "start") {
+        msgs.push({ role: "user", content: "Start the conversation now." });
+      }
+
+      const { reply } = await groqBrowserChat({
+        bridge,
+        messages: msgs,
+        temperature: 0.8,
+        maxTokens: 400,
+      });
+      return reply;
+    } catch {
+      return null;
+    }
+  };
 
   const start = async (c: Char) => {
     setSelected(c);
@@ -52,6 +104,11 @@ export default function RoleplayPage() {
     setHints([]);
     setLoading(true);
     try {
+      const browserReply = await roleplayViaBrowser(c, "start");
+      if (browserReply) {
+        setMessages([{ role: "ai", content: browserReply }]);
+        return;
+      }
       const data = await postJson<{ reply: string }>("/api/ai/roleplay", { character: c.id, action: "start" });
       setMessages([{ role: "ai", content: data.reply }]);
     } catch {
@@ -70,6 +127,11 @@ export default function RoleplayPage() {
     setTyping(true);
     setShowHints(false);
     try {
+      const browserReply = await roleplayViaBrowser(selected, "message", msg, history);
+      if (browserReply) {
+        setMessages((m) => [...m, { role: "ai", content: browserReply }]);
+        return;
+      }
       const data = await postJson<{ reply: string }>("/api/ai/roleplay", {
         character: selected.id,
         action: "message",
@@ -83,7 +145,6 @@ export default function RoleplayPage() {
       setTyping(false);
     }
   };
-
   const getHints = async () => {
     if (!selected) return;
     setShowHints(true);

@@ -2,10 +2,17 @@ import Groq from "groq-sdk";
 
 export const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
 
-export const ANA_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
-export const HIZLI_MODEL = "meta-llama/llama-3.1-8b-instant";
+export const ANA_MODEL = "llama-3.3-70b-versatile";
+export const HIZLI_MODEL = "llama-3.1-8b-instant";
 export const GORSEL_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
-
+/** Tarayıcı/sunucu deneme sırası — biri 404 verirse sıradakine düş */
+export const GROQ_MODEL_FALLBACKS = [
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "llama-3.1-70b-versatile",
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "gemma2-9b-it",
+] as const;
 let _client: Groq | null = null;
 
 export function getGroqClient(): Groq {

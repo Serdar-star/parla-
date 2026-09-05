@@ -316,10 +316,18 @@ function hash(s: string) {
   return Math.abs(h);
 }
 
-/** Groq erişimini hızlıca dener; başarısızsa false. */
-export async function probeGroq(timeoutMs = 4000): Promise<boolean> {
+let _probeCache: { ok: boolean; at: number } | null = null;
+const PROBE_TTL_OK = 5 * 60_000;
+const PROBE_TTL_FAIL = 60_000;
+
+/** Groq erişimini hızlıca dener; başarısızsa false. Sonuç kısa süre cache'lenir. */
+export async function probeGroq(timeoutMs = 2500): Promise<boolean> {
   const key = process.env.GROQ_API_KEY;
   if (!key) return false;
+  if (_probeCache) {
+    const ttl = _probeCache.ok ? PROBE_TTL_OK : PROBE_TTL_FAIL;
+    if (Date.now() - _probeCache.at < ttl) return _probeCache.ok;
+  }
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -328,8 +336,11 @@ export async function probeGroq(timeoutMs = 4000): Promise<boolean> {
       signal: ctrl.signal,
     });
     clearTimeout(t);
-    return res.ok || res.status === 401 || res.status === 403; // reachable even if auth issue
+    const ok = res.ok || res.status === 401 || res.status === 403;
+    _probeCache = { ok, at: Date.now() };
+    return ok;
   } catch {
+    _probeCache = { ok: false, at: Date.now() };
     return false;
   }
 }
