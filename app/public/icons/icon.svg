@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#58cc02"/>
+  <rect width="512" height="512" rx="112" fill="url(#g)"/>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7ce83c"/>
+      <stop offset="1" stop-color="#46a302"/>
+    </linearGradient>
+  </defs>
+  <!-- papağan gövdesi -->
+  <path d="M256 96 C360 96 416 176 416 280 C416 392 348 448 256 448 C164 448 96 392 96 280 C96 176 152 96 256 96 Z" fill="#ffffff" opacity="0.16"/>
+  <!-- gözler -->
+  <circle cx="196" cy="236" r="46" fill="#ffffff"/>
+  <circle cx="316" cy="236" r="46" fill="#ffffff"/>
+  <circle cx="204" cy="246" r="20" fill="#17241c"/>
+  <circle cx="324" cy="246" r="20" fill="#17241c"/>
+  <circle cx="211" cy="239" r="6" fill="#ffffff"/>
+  <circle cx="331" cy="239" r="6" fill="#ffffff"/>
+  <!-- gaga -->
+  <path d="M216 292 Q256 268 296 292 Q284 336 256 340 Q228 336 216 292 Z" fill="#ffc800"/>
+  <path d="M230 312 Q256 330 282 312 Q270 340 256 340 Q242 340 230 312 Z" fill="#e0a800"/>
+  <!-- kâkül -->
+  <path d="M226 108 C222 76 252 64 258 90 C268 66 296 78 286 108 Z" fill="#ffc800"/>
+</svg>

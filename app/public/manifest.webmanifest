@@ -1,0 +1,25 @@
+{
+  "name": "Parla — Dil Öğrenmenin En Güzel Hâli",
+  "short_name": "Parla",
+  "description": "AI öğretmen, boss savaşları, ligler ve bilim destekli tekrar sistemiyle yeni bir dili oyun oynar gibi öğren.",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#f7f8f3",
+  "theme_color": "#58cc02",
+  "orientation": "portrait",
+  "lang": "tr",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

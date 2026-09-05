@@ -1,0 +1,9 @@
+node_modules/
+.next/
+.data/
+.env
+.env.local
+*.tsbuildinfo
+public/sw.js
+public/sw.js.map
+.DS_Store
