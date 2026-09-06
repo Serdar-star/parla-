@@ -302,12 +302,22 @@ export default function AiTeacherPage() {
         ]);
         setTyping(false);
         setAiProvider(result.provider);
+        if (result.provider === "local" && result.warning) {
+          toast("Groq bu ortamda kapalı", {
+            desc: "Kendi PC'nde app/start-pc.bat (veya start-pc.sh) ile aç — orada gerçek Groq çalışır.",
+            type: "warning",
+          });
+        }
         idRef.current += 1;
         setMessages((m) => [...m, { id: idRef.current, role: "ai", text: result.reply }]);
       } catch (err) {
         console.warn("AI chain failed:", err);
         setTyping(false);
         setAiProvider("local");
+        toast("Groq bağlanamadı", {
+          desc: "PC'de: cd app → npm run dev (+ GROQ_API_KEY). Arena sandbox Groq TLS engelliyor.",
+          type: "warning",
+        });
         const fallback = aiReply(text, mode.id, null, turn, 0);
         idRef.current += 1;
         setMessages((m) => [

@@ -1,6 +1,8 @@
 /**
- * Tarayıcı → Groq (kullanıcının ağı).
- * Kısa timeout'lu ama ÖNCELİKLİ — sunucu sandbox'ta Groq'a çıkamaz.
+ * Tarayıcı → Groq.
+ * 1) Direkt api.groq.com (PC tarayıcısı / CORS açıksa)
+ * 2) Birkaç CORS proxy (Authorization header ile POST)
+ * Arena iframe bazen dış API'yi keser → o zaman PC/Vercel şart.
  */
 
 export type BridgeConfig = {
@@ -21,15 +23,24 @@ let cachedBridge: BridgeConfig | null = null;
 let cacheAt = 0;
 const CACHE_MS = 120_000;
 
-let workingBase: string | null = null;
-/** Kısa cooldown — sadece art arda fail spam'ini keser */
-let groqDeadUntil = 0;
+let workingUrlBuilder: ((path: string) => string) | null = null;
+let lastError = "";
+let authDeadUntil = 0;
+
+export function getLastGroqBrowserError() {
+  return lastError;
+}
+
+export function clearGroqCooldown() {
+  authDeadUntil = 0;
+  lastError = "";
+}
 
 export async function loadGroqBridge(force = false): Promise<BridgeConfig> {
   if (!force && cachedBridge && Date.now() - cacheAt < CACHE_MS) return cachedBridge;
   try {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 4000);
+    const t = setTimeout(() => ctrl.abort(), 5000);
     const res = await fetch("/api/ai/bridge", { cache: "no-store", signal: ctrl.signal });
     clearTimeout(t);
     if (!res.ok) {
@@ -41,18 +52,48 @@ export async function loadGroqBridge(force = false): Promise<BridgeConfig> {
     cachedBridge = data;
     cacheAt = Date.now();
     return data;
-  } catch {
+  } catch (e) {
+    lastError = e instanceof Error ? e.message : "bridge_failed";
     cachedBridge = { enabled: false, reason: "fetch_failed" };
     cacheAt = Date.now();
     return cachedBridge;
   }
 }
 
-export function clearGroqCooldown() {
-  groqDeadUntil = 0;
+type UrlBuilder = (apiPath: string) => string;
+
+function builders(baseURL?: string): UrlBuilder[] {
+  const root = (baseURL || "https://api.groq.com/openai/v1").replace(/\/$/, "");
+  const full = (path: string) => `${root}${path.startsWith("/") ? path : `/${path}`}`;
+
+  const list: UrlBuilder[] = [];
+
+  // Önce bilinen çalışan yol
+  if (workingUrlBuilder) list.push(workingUrlBuilder);
+
+  // 1) Direkt Groq
+  list.push((path) => full(path));
+
+  // 2) corsproxy.io — header'ları iletir
+  list.push((path) => `https://corsproxy.io/?${encodeURIComponent(full(path))}`);
+
+  // 3) codetabs proxy
+  list.push((path) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(full(path))}`);
+
+  // 4) thingproxy
+  list.push((path) => `https://thingproxy.freeboard.io/fetch/${full(path)}`);
+
+  // unique by toString of first call
+  const seen = new Set<string>();
+  return list.filter((b) => {
+    const sample = b("/chat/completions");
+    if (seen.has(sample)) return false;
+    seen.add(sample);
+    return true;
+  });
 }
 
-async function postChatOnce(
+async function postJson(
   url: string,
   apiKey: string,
   body: Record<string, unknown>,
@@ -66,34 +107,30 @@ async function postChatOnce(
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-Requested-With": "XMLHttpRequest",
       },
       body: JSON.stringify(body),
       signal: ctrl.signal,
     });
+
+    const text = await res.text();
     if (!res.ok) {
-      const errText = await res.text().catch(() => "");
-      throw new Error(`Groq ${res.status}: ${errText.slice(0, 160)}`);
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 180)}`);
     }
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+
+    let data: { choices?: { message?: { content?: string } }[] };
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`JSON değil: ${text.slice(0, 80)}`);
+    }
     const reply = data.choices?.[0]?.message?.content?.trim() || "";
-    if (!reply) throw new Error("empty");
+    if (!reply) throw new Error("boş cevap");
     return reply;
   } finally {
     clearTimeout(t);
   }
-}
-
-function chatUrl(base: string): string {
-  if (base.includes("corsproxy.io/?")) {
-    const inner = decodeURIComponent(base.split("corsproxy.io/?")[1] || "");
-    return `https://corsproxy.io/?${encodeURIComponent(inner.replace(/\/$/, "") + "/chat/completions")}`;
-  }
-  return `${base.replace(/\/$/, "")}/chat/completions`;
-}
-
-function candidateBases(preferred?: string): string[] {
-  const direct = (preferred || "https://api.groq.com/openai/v1").replace(/\/$/, "");
-  return [...new Set([workingBase, direct, `https://corsproxy.io/?${encodeURIComponent(direct)}`].filter(Boolean))] as string[];
 }
 
 export async function groqBrowserChat(opts: {
@@ -104,22 +141,19 @@ export async function groqBrowserChat(opts: {
   bridge?: BridgeConfig;
   budgetMs?: number;
 }): Promise<{ reply: string; provider: string; model?: string }> {
-  // Auth fail cooldown only — network fail'de her mesajda tekrar dene
-  if (Date.now() < groqDeadUntil) {
-    throw new Error("Groq auth cooldown");
+  if (Date.now() < authDeadUntil) {
+    throw new Error(lastError || "Groq key reddedildi — yeni key al");
   }
 
   const bridge = opts.bridge ?? (await loadGroqBridge());
   if (!bridge.enabled || !bridge.apiKey) {
-    throw new Error("Groq browser bridge kapalı");
+    throw new Error("Bridge kapalı veya key yok");
   }
 
-  const budget = opts.budgetMs ?? 12000;
+  const budget = opts.budgetMs ?? 16000;
   const started = Date.now();
-  const left = () => Math.max(1500, budget - (Date.now() - started));
+  const left = () => Math.max(2000, budget - (Date.now() - started));
 
-  const bases = candidateBases(bridge.baseURL);
-  // Hızlı model önce — gerçek Llama cevabı
   const models = [
     opts.model,
     bridge.fastModel || "llama-3.1-8b-instant",
@@ -128,45 +162,46 @@ export async function groqBrowserChat(opts: {
   ].filter(Boolean) as string[];
   const uniqueModels = [...new Set(models)].slice(0, 2);
 
+  const urlBuilders = builders(bridge.baseURL);
   let lastErr: unknown;
 
-  for (const base of bases) {
+  for (const build of urlBuilders) {
     for (const model of uniqueModels) {
       if (Date.now() - started > budget) break;
+      const url = build("/chat/completions");
       try {
-        const reply = await postChatOnce(
-          chatUrl(base),
+        const reply = await postJson(
+          url,
           bridge.apiKey,
           {
             model,
             messages: opts.messages,
             temperature: opts.temperature ?? 0.7,
-            max_tokens: opts.maxTokens ?? 600,
+            max_tokens: opts.maxTokens ?? 700,
             stream: false,
           },
           left()
         );
-        workingBase = base.startsWith("http") ? base : workingBase;
-        // corsproxy success: remember the proxy base pattern
-        if (base.includes("corsproxy")) workingBase = base;
-        else workingBase = base;
+        workingUrlBuilder = build;
+        lastError = "";
         return { reply, provider: "groq-browser", model };
       } catch (e) {
         lastErr = e;
-        const msg = e instanceof Error ? e.message : "";
-        if (msg.includes("401") || msg.includes("403")) {
-          groqDeadUntil = Date.now() + 120_000;
-          throw e;
+        const msg = e instanceof Error ? e.message : String(e);
+        lastError = msg;
+        if (msg.includes("401") || msg.includes("403") || msg.includes("Invalid API")) {
+          authDeadUntil = Date.now() + 120_000;
+          throw new Error(`Groq key geçersiz/yetkisiz: ${msg}`);
         }
+        // CORS / network / proxy → sıradaki
         continue;
       }
     }
   }
 
-  throw lastErr instanceof Error ? lastErr : new Error("Groq tarayıcı başarısız");
+  throw lastErr instanceof Error ? lastErr : new Error(lastError || "Groq tarayıcı başarısız");
 }
 
-/** Canlılık — soft fail, uzun cooldown YOK */
 export async function pingGroqBrowser(bridge: BridgeConfig): Promise<boolean> {
   if (!bridge.enabled || !bridge.apiKey) return false;
   try {
@@ -179,7 +214,7 @@ export async function pingGroqBrowser(bridge: BridgeConfig): Promise<boolean> {
       model: bridge.fastModel || "llama-3.1-8b-instant",
       maxTokens: 6,
       temperature: 0,
-      budgetMs: 8000,
+      budgetMs: 10000,
     });
     return true;
   } catch {
@@ -188,7 +223,8 @@ export async function pingGroqBrowser(bridge: BridgeConfig): Promise<boolean> {
 }
 
 const MODE_HINTS: Record<string, string> = {
-  serbest: "Serbest sohbet: günlük konularda konuş, hataları nazikçe düzelt. Kısa ve samimi ol (2-4 cümle). Türkçe + İngilizce karışık yazabilirsin.",
+  serbest:
+    "Serbest sohbet: günlük konularda konuş, hataları nazikçe düzelt. Kısa ve samimi ol (2-4 cümle). Türkçe + İngilizce karışık yazabilirsin.",
   gramer: "Gramer modu: gramer sorularını basit ve net açıkla, örnek ver. Türkçe açıkla, örnek İngilizce olsun.",
   kelime: "Kelime modu: yeni kelimeler öğret, telaffuz ve örnek cümlelerle pekiştir.",
   ceviri: "Çeviri: Türkçe cümleleri doğal İngilizceye çevir, alternatifler sun ve açıkla.",
