@@ -225,7 +225,7 @@ export default function AiTeacherPage() {
     let cancelled = false;
     const safety = setTimeout(() => {
       if (!cancelled) setAiProvider((p) => (p === "checking" ? "local" : p));
-    }, 3500);
+    }, 12000);
     void initAiProviders((p, detail) => {
       if (cancelled) return;
       setAiProvider(p);
@@ -289,8 +289,8 @@ export default function AiTeacherPage() {
       .filter((m) => !m.scene && !m.quiz)
       .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("ai" as const), content: m.text }));
 
-    // Hard cap: 6 sn içinde mutlaka cevap (milisaniye hedefi sunucu/local)
-    const hardCap = new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000));
+    // Hard cap: Groq tarayıcıya zaman ver (max 18 sn), sonra yedek
+    const hardCap = new Promise<null>((resolve) => setTimeout(() => resolve(null), 18000));
 
     void (async () => {
       try {

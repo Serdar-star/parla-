@@ -25,13 +25,15 @@ export async function GET() {
       });
     }
 
-    const demo = process.env.DEMO_MODE === "on" || process.env.DEMO_MODE === "true" || process.env.DEMO_MODE !== "off";
-    // Bridge'i hızlı tut — probe max 1.2s (UI "Bağlanıyor"da takılmasın)
-    const serverReachable = await probeGroq(1200);
-
-    // Sunucu zaten Groq'a çıkabiliyorsa köprüye gerek yok (key sızdırma)
-    if (serverReachable && process.env.DEMO_MODE === "off") {
-      return Response.json({ enabled: false, reason: "server_ok", provider: "groq" });
+    // Demo / sandbox: her zaman tarayıcı köprüsünü aç (sunucu TLS engelli olabilir)
+    // Production + sunucu Groq'a çıkabiliyorsa key verme
+    const forceBrowser = process.env.DEMO_MODE !== "off" || process.env.FORCE_GROQ_BROWSER === "1";
+    let serverReachable = false;
+    if (!forceBrowser) {
+      serverReachable = await probeGroq(800);
+      if (serverReachable) {
+        return Response.json({ enabled: false, reason: "server_ok", provider: "groq" });
+      }
     }
 
     const targetLang = user.currentLanguage || "en";
@@ -46,7 +48,7 @@ export async function GET() {
       systemPrompt: buildTeacherSystemPrompt(targetLang, "A2"),
       userId: user.id,
       serverReachable,
-      demo,
+      forceBrowser,
     });
   } catch (err) {
     return handleApiError(err);

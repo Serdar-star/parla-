@@ -1,7 +1,6 @@
 /**
- * Hızlı AI zinciri — ASLA takılmaz.
- * Sıra: sunucu (ms) → Groq tarayıcı (kısa) → yedek throw
- * WebLLM sohbet yolunda YOK (indirme dakikalar sürer, UI kilitler).
+ * AI zinciri — GROQ ÖNCE (tarayıcı), sonra sunucu yedek.
+ * Sandbox sunucusu Groq'a çıkamaz; kullanıcının tarayıcısı çıkabilir.
  */
 
 "use client";
@@ -11,10 +10,11 @@ import {
   groqBrowserChat,
   loadGroqBridge,
   pingGroqBrowser,
+  clearGroqCooldown,
   type BridgeConfig,
   type ChatMessage,
 } from "@/lib/groq-browser";
-import { onWebLlmStatus, getWebLlmStatus, type WebLlmStatus } from "@/lib/webllm-engine";
+import { onWebLlmStatus, type WebLlmStatus } from "@/lib/webllm-engine";
 import { postJson } from "@/lib/api";
 
 export type AiProvider = "groq" | "webllm" | "server" | "local" | "checking";
@@ -25,7 +25,7 @@ export type AiChatResult = {
 };
 
 let bridgeCache: BridgeConfig | null = null;
-let preferred: AiProvider = "local";
+let preferred: AiProvider = "checking";
 
 function withTimeout<T>(p: Promise<T>, ms: number, label = "timeout"): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -46,33 +46,86 @@ function withTimeout<T>(p: Promise<T>, ms: number, label = "timeout"): Promise<T
 export async function initAiProviders(
   onStatus?: (p: AiProvider, detail?: string) => void
 ): Promise<AiProvider> {
-  onStatus?.("checking");
+  onStatus?.("checking", "Groq bağlanıyor…");
+  clearGroqCooldown();
 
-  // Bridge'i arka planda yükle — UI'yi bloklama
   try {
-    const bridge = await withTimeout(loadGroqBridge(true), 3000, "bridge_timeout");
+    const bridge = await withTimeout(loadGroqBridge(true), 5000, "bridge_timeout");
     bridgeCache = bridge;
 
     if (bridge.enabled && bridge.apiKey) {
-      // Kısa ping — max 2.5s; başarısızsa local/server'a düş
+      // Key var → badge "Groq deneniyor"; ping opsiyonel
+      onStatus?.("checking", "Groq test ediliyor…");
       const ok = await pingGroqBrowser(bridge);
       if (ok) {
         preferred = "groq";
-        onStatus?.("groq", "Groq hazır");
+        onStatus?.("groq", "Groq AI aktif");
         return "groq";
       }
+      // Ping fail olsa bile sohbet'te tekrar denenecek (CORS bazen ilk istekte uyanır)
+      preferred = "groq"; // optimistic — chat path tries groq first
+      onStatus?.("groq", "Groq hazır (tarayıcı)");
+      return "groq";
     }
   } catch (e) {
     console.warn("AI init:", e);
   }
 
   preferred = "local";
-  onStatus?.("local", "Hızlı yedek motor");
+  onStatus?.("local", "Yedek motor");
   return "local";
 }
 
 export function subscribeWebLlm(fn: (s: WebLlmStatus) => void) {
   return onWebLlmStatus(fn);
+}
+
+async function tryBrowserGroq(
+  messages: ChatMessage[],
+  budgetMs = 14000
+): Promise<AiChatResult | null> {
+  try {
+    let bridge = bridgeCache;
+    if (!bridge) {
+      bridge = await withTimeout(loadGroqBridge(), 4000, "bridge");
+      bridgeCache = bridge;
+    }
+    if (!bridge.enabled || !bridge.apiKey) return null;
+
+    const { reply } = await groqBrowserChat({
+      bridge,
+      messages,
+      maxTokens: 600,
+      budgetMs,
+    });
+    preferred = "groq";
+    return { reply, provider: "groq" };
+  } catch (e) {
+    console.warn("Browser Groq:", e);
+    return null;
+  }
+}
+
+async function tryServerChat(message: string, mode: string): Promise<AiChatResult | null> {
+  try {
+    const data = await withTimeout(
+      postJson<{ reply: string; provider?: string }>("/api/ai/chat", { message, mode }),
+      10000,
+      "server_timeout"
+    );
+    if (!data.reply) return null;
+    if (data.provider === "groq") {
+      preferred = "groq";
+      return { reply: data.reply, provider: "groq" };
+    }
+    return {
+      reply: data.reply,
+      provider: data.provider === "local" ? "local" : "server",
+    };
+  } catch (e) {
+    console.warn("Server AI:", e);
+    return null;
+  }
 }
 
 export async function clientAiChat(opts: {
@@ -88,52 +141,15 @@ export async function clientAiChat(opts: {
 
   const messages: ChatMessage[] = buildChatMessages(system, opts.mode, opts.history, opts.message);
 
-  // 1) SUNUCU ÖNCE — lokal yedek ms-seviyesinde, Groq açıksa da hızlı
-  try {
-    const data = await withTimeout(
-      postJson<{ reply: string; provider?: string }>("/api/ai/chat", {
-        message: opts.message,
-        mode: opts.mode,
-      }),
-      8000,
-      "server_timeout"
-    );
-    if (data.reply) {
-      if (data.provider === "groq") {
-        preferred = "groq";
-        return { reply: data.reply, provider: "groq" };
-      }
-      // Server local fallback — yine de anında cevap
-      return { reply: data.reply, provider: data.provider === "local" ? "local" : "server" };
-    }
-  } catch (e) {
-    console.warn("Server AI:", e);
-  }
+  // 1) GROQ TARAYICI ÖNCE — gerçek AI (kullanıcı ağı)
+  const groq = await tryBrowserGroq(messages, 14000);
+  if (groq) return groq;
 
-  // 2) Tarayıcı Groq — sadece kısa bütçe (4 sn)
-  try {
-    let bridge = bridgeCache;
-    if (!bridge) {
-      bridge = await withTimeout(loadGroqBridge(), 2000, "bridge");
-      bridgeCache = bridge;
-    }
-    if (bridge.enabled && bridge.apiKey) {
-      const { reply } = await groqBrowserChat({
-        bridge,
-        messages,
-        maxTokens: 400,
-        budgetMs: 4000,
-      });
-      preferred = "groq";
-      return { reply, provider: "groq" };
-    }
-  } catch (e) {
-    console.warn("Groq browser:", e);
-  }
+  // 2) Sunucu (PC/Vercel'de Groq, sandbox'ta local)
+  const server = await tryServerChat(opts.message, opts.mode);
+  if (server) return server;
 
-  // WebLLM sohbet yolunda YOK — model indirme UI'yi kilitliyordu
-
-  throw new Error("AI sağlayıcıları zaman aşımına uğradı");
+  throw new Error("AI sağlayıcıları başarısız");
 }
 
 export async function clientRoleplayChat(opts: {
@@ -144,7 +160,25 @@ export async function clientRoleplayChat(opts: {
   history?: { role: "user" | "ai"; content: string }[];
   characterId: string;
 }): Promise<AiChatResult> {
-  // Roleplay: sunucu önce (anında local character replies)
+  const system =
+    opts.action === "start"
+      ? `Sen ${opts.characterName} karakterisin (${opts.scenario}). Kısa, doğal ilk mesajı İngilizce yaz. 2-3 cümle.`
+      : `Sen ${opts.characterName} karakterisin (${opts.scenario}). Kısa ve doğal İngilizce konuş (2-3 cümle).`;
+
+  const messages: ChatMessage[] = [{ role: "system", content: system }];
+  if (opts.history) {
+    for (const h of opts.history.slice(-8)) {
+      messages.push({ role: h.role === "user" ? "user" : "assistant", content: h.content });
+    }
+  }
+  if (opts.action === "start" && messages.length === 1) {
+    messages.push({ role: "user", content: "Start the conversation now." });
+  }
+
+  // Groq first
+  const groq = await tryBrowserGroq(messages, 12000);
+  if (groq) return groq;
+
   try {
     const data = await withTimeout(
       postJson<{ reply: string; provider?: string }>("/api/ai/roleplay", {
@@ -156,7 +190,7 @@ export async function clientRoleplayChat(opts: {
           content: m.content,
         })),
       }),
-      8000,
+      10000,
       "roleplay_server_timeout"
     );
     if (data.reply) {
@@ -169,43 +203,7 @@ export async function clientRoleplayChat(opts: {
     console.warn("roleplay server:", e);
   }
 
-  // Kısa Groq denemesi
-  try {
-    const system =
-      opts.action === "start"
-        ? `Sen ${opts.characterName} karakterisin (${opts.scenario}). Kısa, doğal ilk mesajı İngilizce yaz. 2-3 cümle.`
-        : `Sen ${opts.characterName} karakterisin (${opts.scenario}). Kısa ve doğal İngilizce konuş (2-3 cümle).`;
-
-    const messages: ChatMessage[] = [{ role: "system", content: system }];
-    if (opts.history) {
-      for (const h of opts.history.slice(-8)) {
-        messages.push({ role: h.role === "user" ? "user" : "assistant", content: h.content });
-      }
-    }
-    if (opts.action === "start" && messages.length === 1) {
-      messages.push({ role: "user", content: "Start now." });
-    }
-
-    let bridge = bridgeCache;
-    if (!bridge) {
-      bridge = await withTimeout(loadGroqBridge(), 2000, "bridge");
-      bridgeCache = bridge;
-    }
-    if (bridge.enabled && bridge.apiKey) {
-      const { reply } = await groqBrowserChat({
-        bridge,
-        messages,
-        temperature: 0.8,
-        maxTokens: 250,
-        budgetMs: 4000,
-      });
-      return { reply, provider: "groq" };
-    }
-  } catch (e) {
-    console.warn("roleplay groq:", e);
-  }
-
-  throw new Error("Roleplay AI zaman aşımı");
+  throw new Error("Roleplay AI başarısız");
 }
 
 export function getPreferredProvider(): AiProvider {
