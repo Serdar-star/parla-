@@ -1,95 +1,65 @@
-# Turso — sandbox’ta gerçekten çalışıyor
+# Turso + Groq — nerede ne çalışır?
 
-## Kısa cevap
+## Tek bakış
 
-| Ortam | Veritabanı | Komut |
-|--------|------------|--------|
-| **Arena sandbox** | **Yerel Turso (`sqld`)** `http://127.0.0.1:8080` ✅ | `npm run turso:local` |
-| **Kendi PC** | Aynı sqld veya dosya veya cloud ✅ | `npm run turso:local` / cloud env |
-| **Vercel** | Turso Cloud `libsql://…` ✅ | env + seed (PC/CI) |
+| Ortam | DB | Groq AI | Ne yap |
+|--------|----|---------|--------|
+| **Arena sandbox** | Yerel `sqld` veya `file:` ✅ | ❌ ağ engeli | UI / içerik demo |
+| **Senin PC** | file **veya** Turso cloud ✅ | ✅ gerçek | **Asıl çalışma** |
+| **Vercel** | Turso cloud ✅ | ✅ gerçek | Canlı site |
 
-Cloud `turso.io` sandbox’tan **ulaşılmaz** (TLS engeli).  
-Bunun yerine **aynı motor** çalışıyor: **libSQL server (`sqld`)** — Turso’nun açık kaynak sunucusu, HTTP + Hrana WS.
-
-```text
-Uygulama  →  @libsql/client  →  http://127.0.0.1:8080 (sqld)  →  .data/sqld-data
-                 aynı client        production’da:
-                              →  libsql://xxx.turso.io + token
-```
-
-Kod: `app/src/db/index.ts` — `file:` / `http:` / `libsql://` hepsi aynı Drizzle yolu.
+Sandbox’ı silmek **zorunlu değil**. PC’de clone + `START-PC` yeterli.
 
 ---
 
-## Sandbox’ta ayağa kaldırma
+## PC’de (senin hedefin)
+
+Rehber: **[PC-KURULUM.md](./PC-KURULUM.md)**
 
 ```bash
-cd app
-npm run turso:local          # sqld + schema + seed
-# ayrı terminal:
-npm run dev                  # .env DATABASE_URL=http://127.0.0.1:8080
-# veya tek komut:
-npm run dev:turso
+git clone https://github.com/Serdar-star/parla-.git
+cd parla- && git checkout arena/01a072d6-parla && git pull
+# Windows: START-PC.bat
+# Mac/Linux: ./START-PC.sh
 ```
 
-Script: `scripts/start-turso-local.sh`  
-Binary: ilk seferde npm’den `@sqld/linux-x64` iner → `tools/bin/sqld`  
-Schema: `scripts/parla-schema.sql`
-
-Portlar:
-
-- **8080** — HTTP (Hrana over HTTP) ← `DATABASE_URL`
-- **8081** — Hrana WebSocket
-
----
-
-## İçerik (seed sonrası)
-
-| Tablo | Adet |
-|--------|------|
-| songs | 18 |
-| podcasts | 14 |
-| news_articles | 12 |
-| vocabulary | 332 |
-| lessons | 15 |
-
-Sayfalar: `/music` · `/podcast` · `/news`  
-API: `GET /api/content/songs|podcasts|news`
-
-Admin: `zeynepkaya@ornek.com` / `demo1234`
-
----
-
-## Production Turso Cloud
-
-1. https://turso.tech → DB oluştur  
-2. Env:
-
-```env
-DATABASE_URL=libsql://parla-xxx.turso.io
-TURSO_AUTH_TOKEN=eyJ...
-GROQ_API_KEY=gsk_...
-JWT_SECRET=uzun-gizli
-DEMO_MODE=on
-```
-
-3. PC/CI’dan (sandbox cloud’a çıkamaz):
-
-```bash
-export DATABASE_URL=libsql://...
-export TURSO_AUTH_TOKEN=...
-npx drizzle-kit push
-npm run db:seed
-```
-
----
-
-## Dosya modu (yedek)
-
-sqld yoksa hâlâ:
+`.env.local`:
 
 ```env
 DATABASE_URL=file:.data/parla.db
+# veya Turso:
+# DATABASE_URL=libsql://parla-xxxx.turso.io
+# TURSO_AUTH_TOKEN=eyJ...
+
+GROQ_API_KEY=gsk_GERCEK_KEY
+JWT_SECRET=uzun-gizli
+DEMO_MODE=on
+NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-Aynı seed, aynı tablolar — sadece gömülü dosya, sunucu yok.
+---
+
+## Sandbox’ta Turso protokolü (sqld)
+
+Cloud `turso.io` kapalı; yerel libSQL server:
+
+```bash
+cd app && npm run turso:local
+# DATABASE_URL=http://127.0.0.1:8080
+```
+
+Aynı `@libsql/client` + Drizzle kodu.
+
+---
+
+## İçerik (seed)
+
+| | Adet |
+|--|------|
+| songs | 18 |
+| podcasts | 14 |
+| news | 12 |
+| vocabulary | 332 |
+| lessons | 15 |
+
+`/music` · `/podcast` · `/news` · `GET /api/content/*`
