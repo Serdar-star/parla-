@@ -2,8 +2,17 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { userLanguages } from "@/db/schema";
 import { handleApiError, requireUser } from "@/lib/auth";
-import { getGroqClient, ANA_MODEL, HIZLI_MODEL, ROLEPLAY_CHARACTERS, groqWithRetry, checkDailyLimit, GROQ_API_KEY } from "@/lib/groq";
-import { localRoleplayReply, localRoleplayReport, probeGroq } from "@/lib/ai-local";
+import {
+  getGroqClient,
+  ANA_MODEL,
+  HIZLI_MODEL,
+  ROLEPLAY_CHARACTERS,
+  groqWithRetry,
+  groqChatCompletion,
+  checkDailyLimit,
+  hasGroqKey,
+} from "@/lib/groq";
+import { localRoleplayReply, localRoleplayReport } from "@/lib/ai-local";
 import { rateLimit, getClientIp } from "@/lib/rate-limit";
 import { z } from "zod";
 
@@ -49,22 +58,17 @@ export async function POST(req: Request) {
       /* ignore */
     }
 
-    const groqUp = Boolean(GROQ_API_KEY) && (await probeGroq(3500));
+    const groqUp = hasGroqKey();
 
     if (action === "start") {
       if (groqUp) {
         try {
-          const client = getGroqClient();
           const prompt = `${charDef.systemPrompt}\nKullanıcının öğrendiği dil: ${targetLang}, seviyesi: ${cefr}. Sen ${charDef.name} karakterisin. İlk mesajı sen başlat, kısa ve karaktere uygun.`;
-          const completion = await groqWithRetry(() =>
-            client.chat.completions.create({
-              model: ANA_MODEL,
-              messages: [{ role: "system", content: prompt }],
-              temperature: 0.8,
-              max_tokens: 300,
-            })
-          );
-          const reply = completion.choices?.[0]?.message?.content || localRoleplayReply(charDef.id, "", true);
+          const { content: reply } = await groqChatCompletion({
+            messages: [{ role: "system", content: prompt }],
+            temperature: 0.8,
+            max_tokens: 300,
+          });
           return Response.json({ reply, character: charDef.id, provider: "groq" });
         } catch {
           /* fall through */
@@ -76,23 +80,19 @@ export async function POST(req: Request) {
     if (action === "hint") {
       if (groqUp) {
         try {
-          const client = getGroqClient();
           const hintPrompt = `Sen ${charDef.name} karakterisin. Kullanıcı ne söyleyeceğini bilmiyor. Bu durumda söyleyebileceği 3 farklı cümleyi ${targetLang} dilinde öner. Kısa, doğal ve seviyeye uygun (${cefr}). Sadece 3 cümle listele, numaralandır.`;
-          const completion = await groqWithRetry(() =>
-            client.chat.completions.create({
-              model: HIZLI_MODEL,
-              messages: [
-                { role: "system", content: hintPrompt },
-                ...((history || []).slice(-6).map((m) => ({
-                  role: (m.role === "user" ? "user" : "assistant") as "user" | "assistant",
-                  content: m.content,
-                }))),
-              ],
-              temperature: 0.7,
-              max_tokens: 300,
-            })
-          );
-          const text = completion.choices?.[0]?.message?.content || "";
+          const { content: text } = await groqChatCompletion({
+            messages: [
+              { role: "system", content: hintPrompt },
+              ...((history || []).slice(-6).map((m) => ({
+                role: (m.role === "user" ? "user" : "assistant") as "user" | "assistant",
+                content: m.content,
+              }))),
+            ],
+            temperature: 0.7,
+            max_tokens: 300,
+            models: [HIZLI_MODEL, ANA_MODEL],
+          });
           const suggestions = text
             .split("\n")
             .filter((l: string) => l.trim().length > 3)
@@ -121,21 +121,16 @@ export async function POST(req: Request) {
     if (action === "finish") {
       if (groqUp) {
         try {
-          const client = getGroqClient();
           const transcript = history || [];
           const analysisPrompt = `Kullanıcının ${charDef.name} (${charDef.scenario}) ile yaptığı roleplay konuşmasını analiz et. Dil: ${targetLang}, Seviye: ${cefr}. Şu formatta JSON döndür (sadece JSON):
 {"score":0-100,"grammar":0-100,"vocabulary":0-100,"communication":0-100,"mistakes":["..."],"suggestions":["..."]}
 Konuşma:
 ${transcript.map((m) => `${m.role}: ${m.content}`).join("\n")}`;
-          const completion = await groqWithRetry(() =>
-            client.chat.completions.create({
-              model: ANA_MODEL,
-              messages: [{ role: "system", content: analysisPrompt }],
-              temperature: 0.3,
-              max_tokens: 800,
-            })
-          );
-          let raw = completion.choices?.[0]?.message?.content || "";
+          const { content: raw } = await groqChatCompletion({
+            messages: [{ role: "system", content: analysisPrompt }],
+            temperature: 0.3,
+            max_tokens: 800,
+          });
           const jsonMatch = raw.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
             return Response.json({ report: JSON.parse(jsonMatch[0]), provider: "groq" });
@@ -191,15 +186,11 @@ ${transcript.map((m) => `${m.role}: ${m.content}`).join("\n")}`;
           return new Response(readable, { headers: { "Content-Type": "text/plain; charset=utf-8", "X-AI-Provider": "groq" } });
         }
 
-        const completion = await groqWithRetry(() =>
-          client.chat.completions.create({
-            model: ANA_MODEL,
-            messages,
-            temperature: 0.8,
-            max_tokens: 500,
-          })
-        );
-        const reply = completion.choices?.[0]?.message?.content?.trim() || localRoleplayReply(charDef.id, message, false);
+        const { content: reply } = await groqChatCompletion({
+          messages,
+          temperature: 0.8,
+          max_tokens: 500,
+        });
         return Response.json({ reply, character: charDef.id, provider: "groq" });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "";

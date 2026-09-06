@@ -1,6 +1,6 @@
 import { handleApiError, requireUser } from "@/lib/auth";
-import { getGroqClient, HIZLI_MODEL, groqWithRetry, GROQ_API_KEY } from "@/lib/groq";
-import { localCorrect, probeGroq } from "@/lib/ai-local";
+import { groqChatCompletion, hasGroqKey, HIZLI_MODEL, ANA_MODEL } from "@/lib/groq";
+import { localCorrect } from "@/lib/ai-local";
 import { rateLimit, getClientIp } from "@/lib/rate-limit";
 import { z } from "zod";
 
@@ -21,25 +21,20 @@ export async function POST(req: Request) {
     if (!parsed.success) return Response.json({ error: "Geçersiz istek" }, { status: 400 });
 
     const { text, targetLang } = parsed.data;
-    const groqUp = Boolean(GROQ_API_KEY) && (await probeGroq(3000));
 
-    if (groqUp) {
+    if (hasGroqKey()) {
       try {
         const systemPrompt = `Sen bir ${targetLang} dil bilgisi uzmanısın. JSON döndür:
 {"original":"...","corrected":"...","errors":[{"error":"...","correction":"...","explanation":"..."}],"alternative":"..."}`;
-        const client = getGroqClient();
-        const completion = await groqWithRetry(() =>
-          client.chat.completions.create({
-            model: HIZLI_MODEL,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: text },
-            ],
-            temperature: 0.2,
-            max_tokens: 800,
-          })
-        );
-        let raw = completion.choices?.[0]?.message?.content || "";
+        const { content: raw } = await groqChatCompletion({
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: text },
+          ],
+          temperature: 0.2,
+          max_tokens: 800,
+          models: [HIZLI_MODEL, ANA_MODEL],
+        });
         const jsonMatch = raw.match(/\{[\s\S]*\}/);
         if (jsonMatch) return Response.json({ ...JSON.parse(jsonMatch[0]), provider: "groq" });
         return Response.json({ original: text, corrected: raw, errors: [], alternative: raw, provider: "groq" });

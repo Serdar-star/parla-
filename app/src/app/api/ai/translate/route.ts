@@ -1,6 +1,6 @@
 import { handleApiError, requireUser } from "@/lib/auth";
-import { getGroqClient, HIZLI_MODEL, groqWithRetry, GROQ_API_KEY } from "@/lib/groq";
-import { localTranslate, probeGroq } from "@/lib/ai-local";
+import { groqChatCompletion, hasGroqKey, HIZLI_MODEL, ANA_MODEL } from "@/lib/groq";
+import { localTranslate } from "@/lib/ai-local";
 import { rateLimit, getClientIp } from "@/lib/rate-limit";
 import { z } from "zod";
 
@@ -23,26 +23,21 @@ export async function POST(req: Request) {
     if (!parsed.success) return Response.json({ error: "Geçersiz istek", details: parsed.error.issues }, { status: 400 });
 
     const { text, style, targetLang, sourceLang } = parsed.data;
-    const groqUp = Boolean(GROQ_API_KEY) && (await probeGroq(3000));
 
-    if (groqUp) {
+    if (hasGroqKey()) {
       try {
         const styleDesc = { resmi: "resmi ve profesyonel", gunluk: "günlük ve doğal", argo: "samimi/argo" }[style];
         const systemPrompt = `Sen profesyonel bir çevirmensin. Kaynak: ${sourceLang}, hedef: ${targetLang}, stil: ${styleDesc}.
 JSON döndür: {"main":"...","alternatives":["...","..."],"idiom":null,"note":"..."}`;
-        const client = getGroqClient();
-        const completion = await groqWithRetry(() =>
-          client.chat.completions.create({
-            model: HIZLI_MODEL,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: text },
-            ],
-            temperature: 0.3,
-            max_tokens: 600,
-          })
-        );
-        let raw = completion.choices?.[0]?.message?.content || "";
+        const { content: raw } = await groqChatCompletion({
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: text },
+          ],
+          temperature: 0.3,
+          max_tokens: 600,
+          models: [HIZLI_MODEL, ANA_MODEL],
+        });
         const jsonMatch = raw.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           return Response.json({ ...JSON.parse(jsonMatch[0]), provider: "groq" });

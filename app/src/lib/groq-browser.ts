@@ -97,10 +97,12 @@ export async function groqBrowserChat(opts: {
     throw new Error("Groq browser bridge kapalı");
   }
 
+  const extraModels = (bridge as BridgeConfig & { models?: string[] }).models || [];
   const models = [
     opts.model,
     bridge.model,
     bridge.fastModel,
+    ...extraModels,
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
     "llama-3.1-70b-versatile",

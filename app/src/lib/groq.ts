@@ -1,11 +1,17 @@
 import Groq from "groq-sdk";
 
+/** Her okumada taze — process.env runtime'da set edilmiş olabilir */
+export function getGroqApiKey(): string {
+  return (process.env.GROQ_API_KEY || "").trim();
+}
+
+/** Geriye uyumluluk */
 export const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
 
 export const ANA_MODEL = "llama-3.3-70b-versatile";
 export const HIZLI_MODEL = "llama-3.1-8b-instant";
 export const GORSEL_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
-/** Tarayıcı/sunucu deneme sırası — biri 404 verirse sıradakine düş */
+/** Sunucu + tarayıcı model deneme sırası */
 export const GROQ_MODEL_FALLBACKS = [
   "llama-3.3-70b-versatile",
   "llama-3.1-8b-instant",
@@ -13,12 +19,77 @@ export const GROQ_MODEL_FALLBACKS = [
   "meta-llama/llama-4-scout-17b-16e-instruct",
   "gemma2-9b-it",
 ] as const;
+
 let _client: Groq | null = null;
+let _clientKey = "";
 
 export function getGroqClient(): Groq {
-  if (_client) return _client;
-  _client = new Groq({ apiKey: GROQ_API_KEY });
+  const key = getGroqApiKey();
+  if (!key) {
+    throw new Error("GROQ_API_KEY eksik — .env.local dosyasına ekle");
+  }
+  if (_client && _clientKey === key) return _client;
+  _client = new Groq({ apiKey: key });
+  _clientKey = key;
   return _client;
+}
+
+export function hasGroqKey(): boolean {
+  return getGroqApiKey().length > 10;
+}
+
+export async function groqWithRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const is429 = msg.includes("429") || msg.toLowerCase().includes("rate limit");
+      if (is429 && i < retries - 1) {
+        await new Promise((r) => setTimeout(r, 3000 * (i + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+/** Model listesini dener; ilki tutmazsa sıradakine geçer */
+export async function groqChatCompletion(opts: {
+  messages: { role: "system" | "user" | "assistant"; content: string }[];
+  temperature?: number;
+  max_tokens?: number;
+  models?: readonly string[];
+  stream?: false;
+}): Promise<{ content: string; model: string }> {
+  const client = getGroqClient();
+  const models = opts.models?.length ? opts.models : GROQ_MODEL_FALLBACKS;
+  let lastErr: unknown;
+  for (const model of models) {
+    try {
+      const completion = await groqWithRetry(() =>
+        client.chat.completions.create({
+          model,
+          messages: opts.messages,
+          temperature: opts.temperature ?? 0.7,
+          max_tokens: opts.max_tokens ?? 800,
+          stream: false,
+        })
+      );
+      const content = completion.choices?.[0]?.message?.content?.trim() || "";
+      if (content) return { content, model };
+    } catch (err: unknown) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("401") || msg.includes("403") || msg.includes("Invalid API")) throw err;
+      // 404 model / 400 → sıradaki model
+      continue;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("Groq tüm modellerde başarısız");
 }
 
 export const ROLEPLAY_CHARACTERS = {
@@ -131,24 +202,6 @@ export function checkDailyLimit(userId: number, isPremium: boolean): { allowed: 
   return { allowed: true, remaining: DAILY_LIMIT - entry.count };
 }
 
-export async function groqWithRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
-  let lastErr: unknown;
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await fn();
-    } catch (err: unknown) {
-      lastErr = err;
-      const msg = err instanceof Error ? err.message : String(err);
-      const is429 = msg.includes("429") || msg.toLowerCase().includes("rate limit");
-      if (is429 && i < retries - 1) {
-        await new Promise((r) => setTimeout(r, 3000 * (i + 1)));
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw lastErr;
-}
 
 export function buildTeacherSystemPrompt(targetLang: string, level: string): string {
   return `Sen bir dil öğretmenisin. Kullanıcının öğrendiği dil: ${targetLang}. Kullanıcının anadili: Türkçe. Kullanıcının seviyesi: ${level}. Hataları nazikçe düzelt ve nedenini açıkla. Her mesajın sonunda soru sor. Motive edici ol. Kısa ve samimi ol (2-4 cümle). Türkçe ve ${targetLang} dillerini harmanlayabilirsin.`;

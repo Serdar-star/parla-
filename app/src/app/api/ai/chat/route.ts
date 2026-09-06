@@ -2,7 +2,16 @@ import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { aiConversations, userLanguages } from "@/db/schema";
 import { handleApiError, requireUser } from "@/lib/auth";
-import { getGroqClient, ANA_MODEL, checkDailyLimit, buildTeacherSystemPrompt, groqWithRetry, GROQ_API_KEY } from "@/lib/groq";
+import {
+  getGroqClient,
+  ANA_MODEL,
+  GROQ_MODEL_FALLBACKS,
+  checkDailyLimit,
+  buildTeacherSystemPrompt,
+  groqWithRetry,
+  groqChatCompletion,
+  hasGroqKey,
+} from "@/lib/groq";
 import { localTeacherReply, probeGroq } from "@/lib/ai-local";
 import { rateLimit, getClientIp } from "@/lib/rate-limit";
 import { z } from "zod";
@@ -40,7 +49,10 @@ export async function POST(req: Request) {
 
     const limitCheck = checkDailyLimit(user.id, !!user.isPremium);
     if (!limitCheck.allowed) {
-      return Response.json({ error: "Günlük limitin doldu, premium'a geç veya yarın tekrar dene.", limit: true }, { status: 429 });
+      return Response.json(
+        { error: "Günlük limitin doldu, premium'a geç veya yarın tekrar dene.", limit: true },
+        { status: 429 }
+      );
     }
 
     let targetLang = user.currentLanguage || "en";
@@ -56,12 +68,25 @@ export async function POST(req: Request) {
       /* ignore */
     }
 
-    await db.insert(aiConversations).values({ userId: user.id, languageCode: targetLang, role: "user", content: trimmed });
+    await db.insert(aiConversations).values({
+      userId: user.id,
+      languageCode: targetLang,
+      role: "user",
+      content: trimmed,
+    });
 
     let history: { role: string; content: string }[] = [];
     try {
-      const rows = await db.select().from(aiConversations).where(eq(aiConversations.userId, user.id)).orderBy(desc(aiConversations.id)).limit(12);
-      history = rows.reverse().map((r) => ({ role: r.role === "user" ? "user" : "assistant", content: r.content }));
+      const rows = await db
+        .select()
+        .from(aiConversations)
+        .where(eq(aiConversations.userId, user.id))
+        .orderBy(desc(aiConversations.id))
+        .limit(12);
+      history = rows.reverse().map((r) => ({
+        role: r.role === "user" ? "user" : "assistant",
+        content: r.content,
+      }));
     } catch {
       /* ignore */
     }
@@ -69,98 +94,121 @@ export async function POST(req: Request) {
     const systemPrompt = buildTeacherSystemPrompt(targetLang, cefr) + "\n" + (MODES[mode] ?? MODES.serbest);
     const useStreaming = stream || req.headers.get("accept")?.includes("text/event-stream");
 
-    // Try Groq if key exists and network allows
-    const groqUp = Boolean(GROQ_API_KEY) && (await probeGroq(3500));
+    const keyOk = hasGroqKey();
+    // Key varsa dene — probe başarısız olsa bile bir kez gerçek çağrı dene (bazı ağlarda probe farklı)
+    const shouldTryGroq = keyOk;
 
-    if (groqUp) {
+    if (shouldTryGroq) {
+      const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
+        { role: "system", content: systemPrompt },
+        ...history.slice(-10).map((h) => ({
+          role: (h.role === "user" ? "user" : "assistant") as "user" | "assistant",
+          content: h.content,
+        })),
+        { role: "user", content: trimmed },
+      ];
+
       try {
-        const client = getGroqClient();
-        const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
-          { role: "system", content: systemPrompt },
-          ...history.slice(-10).map((h) => ({
-            role: (h.role === "user" ? "user" : "assistant") as "user" | "assistant",
-            content: h.content,
-          })),
-          { role: "user", content: trimmed },
-        ];
-
         if (useStreaming) {
-          const streamResp = await groqWithRetry(() =>
-            client.chat.completions.create({
-              model: ANA_MODEL,
-              messages,
-              temperature: 0.7,
-              max_tokens: 800,
-              stream: true,
-            })
-          );
-
-          let fullReply = "";
-          const encoder = new TextEncoder();
-          const readable = new ReadableStream({
-            async start(controller) {
-              try {
-                for await (const chunk of streamResp as AsyncIterable<{ choices?: { delta?: { content?: string } }[] }>) {
-                  const delta = chunk.choices?.[0]?.delta?.content || "";
-                  if (delta) {
-                    fullReply += delta;
-                    controller.enqueue(encoder.encode(delta));
+          const client = getGroqClient();
+          let streamResp: AsyncIterable<{ choices?: { delta?: { content?: string } }[] }> | null = null;
+          let usedModel = ANA_MODEL;
+          for (const model of GROQ_MODEL_FALLBACKS) {
+            try {
+              streamResp = (await groqWithRetry(() =>
+                client.chat.completions.create({
+                  model,
+                  messages,
+                  temperature: 0.7,
+                  max_tokens: 800,
+                  stream: true,
+                })
+              )) as AsyncIterable<{ choices?: { delta?: { content?: string } }[] }>;
+              usedModel = model;
+              break;
+            } catch {
+              continue;
+            }
+          }
+          if (streamResp) {
+            let fullReply = "";
+            const encoder = new TextEncoder();
+            const readable = new ReadableStream({
+              async start(controller) {
+                try {
+                  for await (const chunk of streamResp!) {
+                    const delta = chunk.choices?.[0]?.delta?.content || "";
+                    if (delta) {
+                      fullReply += delta;
+                      controller.enqueue(encoder.encode(delta));
+                    }
                   }
+                  controller.close();
+                  if (fullReply.trim()) {
+                    await db.insert(aiConversations).values({
+                      userId: user.id,
+                      languageCode: targetLang,
+                      role: "assistant",
+                      content: fullReply.trim(),
+                    });
+                  }
+                } catch (e) {
+                  controller.error(e);
                 }
-                controller.close();
-                if (fullReply.trim()) {
-                  await db.insert(aiConversations).values({
-                    userId: user.id,
-                    languageCode: targetLang,
-                    role: "assistant",
-                    content: fullReply.trim(),
-                  });
-                }
-              } catch (e) {
-                controller.error(e);
-              }
-            },
-          });
-
-          return new Response(readable, {
-            headers: {
-              "Content-Type": "text/plain; charset=utf-8",
-              "Cache-Control": "no-cache",
-              "X-Remaining": String(limitCheck.remaining),
-              "X-AI-Provider": "groq",
-            },
-          });
-        }
-
-        const completion = await groqWithRetry(() =>
-          client.chat.completions.create({
-            model: ANA_MODEL,
+              },
+            });
+            return new Response(readable, {
+              headers: {
+                "Content-Type": "text/plain; charset=utf-8",
+                "Cache-Control": "no-cache",
+                "X-Remaining": String(limitCheck.remaining),
+                "X-AI-Provider": "groq",
+                "X-AI-Model": usedModel,
+              },
+            });
+          }
+        } else {
+          const { content: reply, model } = await groqChatCompletion({
             messages,
             temperature: 0.7,
             max_tokens: 800,
-          })
-        );
-        const reply = completion.choices?.[0]?.message?.content?.trim() || localTeacherReply(trimmed, mode);
-        await db.insert(aiConversations).values({ userId: user.id, languageCode: targetLang, role: "assistant", content: reply });
-        return Response.json({ reply, mode, usedAI: true, provider: "groq", remaining: limitCheck.remaining });
+          });
+          await db.insert(aiConversations).values({
+            userId: user.id,
+            languageCode: targetLang,
+            role: "assistant",
+            content: reply,
+          });
+          return Response.json({
+            reply,
+            mode,
+            usedAI: true,
+            provider: "groq",
+            model,
+            remaining: limitCheck.remaining,
+          });
+        }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes("429") || msg.toLowerCase().includes("rate limit")) {
           return Response.json({ error: "AI şu an çok meşgul, biraz sonra tekrar dene" }, { status: 429 });
         }
-        console.error("Groq chat error, falling back to local:", msg);
+        console.error("Groq chat error, falling back:", msg);
       }
     }
 
-    // Local intelligent fallback (always works offline / blocked network)
     const reply = localTeacherReply(trimmed, mode);
-    await db.insert(aiConversations).values({ userId: user.id, languageCode: targetLang, role: "assistant", content: reply });
+    await db.insert(aiConversations).values({
+      userId: user.id,
+      languageCode: targetLang,
+      role: "assistant",
+      content: reply,
+    });
 
     if (useStreaming) {
       const encoder = new TextEncoder();
       const readable = new ReadableStream({
         async start(controller) {
-          // Stream word-by-word for nicer UX
           const parts = reply.split(/(\s+)/);
           for (const p of parts) {
             controller.enqueue(encoder.encode(p));
@@ -178,12 +226,18 @@ export async function POST(req: Request) {
       });
     }
 
+    const groqReachable = keyOk ? await probeGroq(2000) : false;
     return Response.json({
       reply,
       mode,
       usedAI: true,
-      provider: groqUp ? "local-fallback" : "local",
+      provider: "local",
       remaining: limitCheck.remaining,
+      hint: !keyOk
+        ? "GROQ_API_KEY yok — .env.local dosyasına ekle ve sunucuyu yeniden başlat"
+        : !groqReachable
+          ? "Groq ağına bu sunucudan çıkılamıyor — tarayıcı köprüsü veya PC/Vercel kullan"
+          : "Groq hata verdi, yedek motor aktif",
     });
   } catch (err) {
     return handleApiError(err);

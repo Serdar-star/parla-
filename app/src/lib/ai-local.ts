@@ -322,7 +322,7 @@ const PROBE_TTL_FAIL = 60_000;
 
 /** Groq erişimini hızlıca dener; başarısızsa false. Sonuç kısa süre cache'lenir. */
 export async function probeGroq(timeoutMs = 2500): Promise<boolean> {
-  const key = process.env.GROQ_API_KEY;
+  const key = (process.env.GROQ_API_KEY || "").trim();
   if (!key) return false;
   if (_probeCache) {
     const ttl = _probeCache.ok ? PROBE_TTL_OK : PROBE_TTL_FAIL;
