@@ -1,36 +1,26 @@
-# Parla — PC’de gerçek Groq + Turso
+# Parla — Sadece PC (sandbox yok)
 
-Sandbox’ı kapatmana gerek yok; **PC’de ayrı çalıştırırsın.**  
-PC’de internet açık → **Groq gerçek**, **Turso cloud veya yerel DB gerçek.**
+Sandbox’tan **tamamen ayrıldın**. Bundan sonra her şey kendi bilgisayarında.
 
----
-
-## 5 dakikada ayağa kalk (özet)
-
-```text
-1. Node 20+ kur
-2. git clone + branch
-3. start-pc.bat  (Windows)  veya  ./start-pc.sh  (Mac/Linux)
-4. .env.local içine GROQ_API_KEY yapıştır
-5. http://localhost:3000 → AI Öğretmen + Müzik
-```
+Repo: https://github.com/Serdar-star/parla-  
+Branch: **`arena/01a072d6-parla`**
 
 ---
 
-## 0) Gerekenler
+## 1) Kur (bir kez)
 
 | Araç | Link |
 |------|------|
-| **Node.js 20+ LTS** | https://nodejs.org |
-| **Git** | https://git-scm.com |
-| **Groq API key** | https://console.groq.com/keys → `gsk_...` |
-| **Turso** (opsiyonel ama önerilir) | https://turso.tech → ücretsiz DB |
+| Node.js 20+ LTS | https://nodejs.org |
+| Git | https://git-scm.com |
+| Groq key | https://console.groq.com/keys |
+| Turso (opsiyonel) | https://turso.tech |
 
-Windows’ta kurulumdan sonra **yeni** PowerShell / CMD aç (PATH yenilensin).
+Windows: kurulumdan sonra **yeni** CMD/PowerShell aç.
 
 ---
 
-## 1) Repoyu indir
+## 2) İndir
 
 ```bash
 git clone https://github.com/Serdar-star/parla-.git
@@ -39,213 +29,111 @@ git checkout arena/01a072d6-parla
 git pull origin arena/01a072d6-parla
 ```
 
-> **Bu branch’i kullan** (`arena/01a072d6-parla`). `main` eski olabilir.
+ZIP indirdiysen: zip’i aç → `parla-` klasörüne gir → branch’in bu olduğundan emin ol.
 
 ---
 
-## 2) Tek tık başlat
+## 3) Çalıştır
 
 ### Windows
-
-1. Klasör: `parla-\app\`
-2. **`start-pc.bat`** dosyasına çift tık
-3. İlk seferde Notepad açılır → `GROQ_API_KEY=gsk_...` yaz → kaydet → Enter
-
-veya kökten: `START-PC.bat`
+Klasörde **`START-PC.bat`** → çift tık.
 
 ### Mac / Linux
-
 ```bash
-cd parla-/app
-chmod +x start-pc.sh
-./start-pc.sh
+chmod +x START-PC.sh
+./START-PC.sh
 ```
 
-veya kökten: `./START-PC.sh`
-
-Script şunları yapar:
-
-1. `npm install` (yoksa)
-2. `.env.local` oluşturur
-3. Veritabanı push + seed
-4. `npm run dev` → **http://localhost:3000**
-
----
-
-## 3) `.env.local` — iki mod
-
-Dosya: `app/.env.local` (git’e **gitmez**)
-
-### A) Hızlı (dosya DB + Groq) — ilk deneme
+İlk sefer `.env.local` açılır:
 
 ```env
-DATABASE_URL=file:.data/parla.db
-JWT_SECRET=istedigin-uzun-gizli-yazi-12345
-DEMO_MODE=on
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-GROQ_API_KEY=gsk_SENIN_GERCEK_KEYIN
+GROQ_API_KEY=gsk_xxxxxxxx
 ```
 
-Bu yeter: müzik/podcast/ders + **gerçek Groq AI**.
-
-### B) Tam (Turso Cloud + Groq) — kalıcı DB
-
-1. https://turso.tech → kayıt → **Create Database** (`parla` gibi isim)
-2. URL kopyala: `libsql://parla-xxxx.turso.io`
-3. Token: dashboard’dan veya CLI:
-
-```bash
-# Turso CLI (bir kez)
-curl -sSfL https://get.tur.so/install.sh | bash
-turso auth login
-turso db create parla
-turso db show parla --url
-turso db tokens create parla
-```
-
-4. `.env.local`:
-
-```env
-DATABASE_URL=libsql://parla-xxxx.turso.io
-TURSO_DATABASE_URL=libsql://parla-xxxx.turso.io
-TURSO_AUTH_TOKEN=eyJ...token...
-JWT_SECRET=istedigin-uzun-gizli-yazi-12345
-DEMO_MODE=on
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-GROQ_API_KEY=gsk_SENIN_GERCEK_KEYIN
-```
-
-5. Seed’i Turso’ya bas (script otomatik dener; elle):
-
-```bash
-cd app
-# Windows PowerShell:
-$env:DATABASE_URL="libsql://parla-xxxx.turso.io"
-$env:TURSO_AUTH_TOKEN="eyJ..."
-npx drizzle-kit push
-npm run db:seed
-npm run dev
-```
-
-```bash
-# Mac/Linux
-export DATABASE_URL=libsql://parla-xxxx.turso.io
-export TURSO_AUTH_TOKEN=eyJ...
-npx drizzle-kit push
-npm run db:seed
-npm run dev
-```
-
----
-
-## 4) Çalışıyor mu? Kontrol listesi
+Kaydet. Script: `npm install` → DB push → seed → `npm run dev`.
 
 Tarayıcı: **http://localhost:3000**
 
-| Test | Beklenen |
-|------|----------|
-| `/dashboard` | Demo kullanıcı, XP |
+---
+
+## 4) Kanıt — çalışıyor mu?
+
+| Test | Sonuç |
+|------|--------|
 | `/music` | 18 şarkı |
 | `/podcast` | 14 podcast |
 | `/news` | 12 haber |
-| `/ai-teacher` | Cevap + **Groq** badge / `provider: groq` |
-
-API kontrol:
+| `/ai-teacher` | Cevap + **Groq** (YEDEK değil) |
 
 ```bash
-# AI status
 curl -s http://localhost:3000/api/ai/status
+# hasKey: true
 
-# Chat (Groq)
 curl -s -X POST http://localhost:3000/api/ai/chat \
   -H "Content-Type: application/json" \
-  -d "{\"message\":\"Explain present perfect simply\",\"mode\":\"gramer\"}"
-```
-
-Cevapta `"provider":"groq"` ve `"usedAI":true` → **tamam.**
-
-Şarkılar:
-
-```bash
-curl -s http://localhost:3000/api/content/songs | head -c 200
+  -d "{\"message\":\"Explain present perfect\",\"mode\":\"gramer\"}"
+# provider: groq
 ```
 
 ---
 
-## 5) Sandbox vs PC
+## 5) Turso cloud (kalıcı DB)
 
-| | Arena sandbox | Senin PC |
-|--|---------------|----------|
-| Groq | ❌ ağ engeli | ✅ gerçek |
-| Turso cloud | ❌ TLS engeli | ✅ gerçek |
-| Yerel sqld / file DB | ✅ | ✅ |
-| Ne yapmalısın? | Demo / UI | **Asıl çalışma burası** |
+Dosya DB (`file:.data/parla.db`) PC’de yeter. Kalıcı / Vercel için:
 
-Sandbox’ı “ayırman” = PC’de clone + start. Sandbox silmene gerek yok.
-
----
-
-## 6) Sık hatalar
-
-| Hata | Çözüm |
-|------|--------|
-| AI yedek / YEDEK | `.env.local`’de gerçek `gsk_...`, kaydet, **dev’i yeniden başlat** |
-| `GROQ_API_KEY eksik` | Placeholder `gsk_buraya_yapistir` bırakma |
-| `DATABASE_URL gerekli` | `.env.local` satırını kontrol et |
-| Turso `UNAUTHORIZED` | Token yanlış / süresi dolmuş → yeni token |
-| Turso bağlanamıyor | İnternet + URL `libsql://` ile başlıyor mu |
-| Port 3000 dolu | `npx next dev -H 0.0.0.0 -p 3001` |
-| Eski kod | `git pull origin arena/01a072d6-parla` |
-| `drizzle-kit push` TTY | Script `--force` kullanır; yine takılırsa file moda geç |
-
----
-
-## 7) Vercel (canlı site)
-
-1. vercel.com → Import `Serdar-star/parla-`
-2. **Root Directory:** `app`
-3. Branch: `arena/01a072d6-parla`
-4. Env:
+1. turso.tech → Create Database  
+2. URL + token al  
+3. `app/.env.local`:
 
 ```env
 DATABASE_URL=libsql://parla-xxxx.turso.io
 TURSO_DATABASE_URL=libsql://parla-xxxx.turso.io
 TURSO_AUTH_TOKEN=eyJ...
 GROQ_API_KEY=gsk_...
-JWT_SECRET=uzun-gizli
+JWT_SECRET=uzun-gizli-yazi
 DEMO_MODE=on
-NEXT_PUBLIC_APP_URL=https://senin-proje.vercel.app
+NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-5. Deploy sonrası **PC’den bir kez** seed (Vercel build seed etmez):
+4. Yeniden:
 
 ```bash
-export DATABASE_URL=libsql://...
-export TURSO_AUTH_TOKEN=...
-cd app && npx drizzle-kit push && npm run db:seed
-```
-
----
-
-## Komut özeti (kopyala-yapıştır)
-
-```bash
-git clone https://github.com/Serdar-star/parla-.git
-cd parla- && git checkout arena/01a072d6-parla && git pull
 cd app
-cp .env.example .env.local
-# → GROQ_API_KEY=gsk_...  (ve istersen Turso satırları)
-npm install
-npx drizzle-kit push
+npx drizzle-kit push --force
 npm run db:seed
 npm run dev
 ```
 
-Windows: `app\start-pc.bat` çift tık yeterli.
+veya `START-PC` tekrar.
 
 ---
 
-Admin (DEMO_MODE=on iken login şart değil):  
-`zeynepkaya@ornek.com` / `demo1234`
+## 6) Sık hatalar
 
-Takılırsan hata metnini aynen at.
+| Sorun | Çözüm |
+|--------|--------|
+| AI YEDEK | Gerçek `gsk_...` yaz, placeholder bırakma, dev’i yeniden başlat |
+| Port 3000 dolu | Başka terminal kapat veya `-p 3001` |
+| `DATABASE_URL gerekli` | `app/.env.local` var mı bak |
+| Eski kod | `git pull origin arena/01a072d6-parla` |
+| Turso UNAUTHORIZED | Yeni token al |
+
+---
+
+## 7) Vercel
+
+1. Import repo · Root: **`app`** · Branch: **`arena/01a072d6-parla`**  
+2. Env: Groq + Turso + JWT + DEMO + APP_URL  
+3. Deploy  
+4. PC’den bir kez Turso’ya seed (yukarıdaki push+seed)
+
+---
+
+## Özet
+
+```text
+Sandbox  →  bitti / kullanma
+PC       →  START-PC + GROQ key  →  gerçek AI + gerçek DB
+```
+
+Takılırsan hata satırını aynen gönder.
