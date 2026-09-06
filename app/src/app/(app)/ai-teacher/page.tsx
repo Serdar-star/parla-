@@ -5,8 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { BookOpen, Check, GraduationCap, Languages, MessageSquareText, Mic, Send, Sparkles, Wand2, X, Zap } from "lucide-react";
 import { Badge, useToast } from "@/components/ui";
 import { useApp } from "@/stores/app";
-import { postJson } from "@/lib/api";
-import { buildChatMessages, groqBrowserChat, loadGroqBridge, type BridgeConfig } from "@/lib/groq-browser";
+import { clientAiChat, initAiProviders, subscribeWebLlm, type AiProvider } from "@/lib/ai-client";
 import { cn, fireConfetti, greeting } from "@/lib/utils";
 /* ══════════════════════════════ LUMEN AVATAR ═════════════════════════════ */
 
@@ -208,11 +207,11 @@ export default function AiTeacherPage() {
   const [recording, setRecording] = useState(false);
   const [userTurns, setUserTurns] = useState(0);
   const [scenarioDone, setScenarioDone] = useState<string[]>([]);
-  const [aiProvider, setAiProvider] = useState<"groq" | "local" | "checking">("checking");
+  const [aiProvider, setAiProvider] = useState<AiProvider>("checking");
+  const [aiDetail, setAiDetail] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   const idRef = useRef(1);
   const goalRewarded = useRef(false);
-  const bridgeRef = useRef<BridgeConfig | null>(null);
 
   const goalPct = Math.min(100, userTurns * 20);
   const lumenMood: LumenMood = recording ? "listening" : typing ? "thinking" : goalPct >= 100 ? "happy" : "idle";
@@ -221,39 +220,29 @@ export default function AiTeacherPage() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing]);
 
-  // Groq tarayıcı köprüsünü yükle (sandbox sunucu engelli olsa bile tarayıcı ağı çalışır)
+  // Groq (tarayıcı) → WebLLM → yedek
   useEffect(() => {
     let cancelled = false;
-    loadGroqBridge(true)
-      .then(async (bridge) => {
-        if (cancelled) return;
-        bridgeRef.current = bridge;
-        if (!bridge.enabled || !bridge.apiKey) {
-          setAiProvider("local");
-          return;
-        }
-        // Hızlı canlılık testi — tarayıcıdan api.groq.com
-        try {
-          const test = await groqBrowserChat({
-            bridge,
-            messages: [
-              { role: "system", content: "Reply with exactly: OK" },
-              { role: "user", content: "ping" },
-            ],
-            model: bridge.fastModel || bridge.model,
-            maxTokens: 8,
-            temperature: 0,
-          });
-          if (!cancelled) setAiProvider(test.reply ? "groq" : "local");
-        } catch {
-          if (!cancelled) setAiProvider("local");
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setAiProvider("local");
-      });
+    void initAiProviders((p, detail) => {
+      if (cancelled) return;
+      setAiProvider(p);
+      if (detail) setAiDetail(detail);
+    });
+    const unsub = subscribeWebLlm((s) => {
+      if (cancelled) return;
+      if (s.state === "loading") {
+        setAiDetail(s.text || `Model %${Math.round((s.progress || 0) * 100)}`);
+        setAiProvider((prev) => (prev === "groq" ? prev : "checking"));
+      } else if (s.state === "ready") {
+        setAiProvider((prev) => (prev === "groq" ? prev : "webllm"));
+        setAiDetail(s.modelId);
+      } else if (s.state === "error") {
+        setAiDetail(s.message);
+      }
+    });
     return () => {
       cancelled = true;
+      unsub();
     };
   }, []);
   useEffect(() => {
@@ -299,48 +288,21 @@ export default function AiTeacherPage() {
       return;
     }
 
-    // 1) Tarayıcı → Groq (sandbox TLS engelini aşar)
-    // 2) Sunucu /api/ai/chat
-    // 3) Yerel yedek öğretmen
     setTyping(true);
     (async () => {
       const historyForAi = messages
         .filter((m) => !m.scene && !m.quiz)
         .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("ai" as const), content: m.text }));
 
-      // Browser Groq
       try {
-        let bridge = bridgeRef.current;
-        if (!bridge) {
-          bridge = await loadGroqBridge();
-          bridgeRef.current = bridge;
-        }
-        if (bridge.enabled && bridge.apiKey) {
-          const chatMsgs = buildChatMessages(bridge.systemPrompt || "Sen sabırlı bir dil öğretmenisin.", mode.id, historyForAi, text);
-          const { reply } = await groqBrowserChat({ bridge, messages: chatMsgs });
-          setTyping(false);
-          setAiProvider("groq");
-          idRef.current += 1;
-          setMessages((m) => [...m, { id: idRef.current, role: "ai", text: reply }]);
-          return;
-        }
-      } catch (err) {
-        console.warn("Groq browser bridge failed, falling back:", err);
-      }
-
-      // Server path
-      try {
-        const data = await postJson<{ reply: string; provider?: string; usedAI?: boolean }>("/api/ai/chat", {
-          message: text,
-          mode: mode.id,
-        });
+        const result = await clientAiChat({ message: text, mode: mode.id, history: historyForAi });
         setTyping(false);
-        if (data.provider === "groq") setAiProvider("groq");
+        setAiProvider(result.provider);
         idRef.current += 1;
-        setMessages((m) => [...m, { id: idRef.current, role: "ai", text: data.reply }]);
+        setMessages((m) => [...m, { id: idRef.current, role: "ai", text: result.reply }]);
         return;
-      } catch {
-        /* fall through */
+      } catch (err) {
+        console.warn("AI chain failed:", err);
       }
 
       setTyping(false);
@@ -412,10 +374,14 @@ export default function AiTeacherPage() {
                 Lumen <Badge tone="violet">AI Öğretmen</Badge>
                 {aiProvider === "groq" ? (
                   <Badge tone="gold">Groq ●</Badge>
+                ) : aiProvider === "webllm" ? (
+                  <Badge tone="azure">WebLLM ●</Badge>
                 ) : aiProvider === "checking" ? (
                   <Badge tone="violet">Bağlanıyor…</Badge>
+                ) : aiProvider === "server" ? (
+                  <Badge tone="primary">Sunucu</Badge>
                 ) : (
-                  <Badge tone="azure">Yerel</Badge>
+                  <Badge tone="mut">Yedek</Badge>
                 )}
               </p>
               <p className="text-xs font-bold text-primary">
@@ -425,9 +391,11 @@ export default function AiTeacherPage() {
                     ? "✍️ Düşünüyor..."
                     : aiProvider === "groq"
                       ? "● Groq AI aktif · Llama"
-                      : aiProvider === "checking"
-                        ? "● Groq bağlantısı kontrol ediliyor…"
-                        : "● Çevrimiçi · Yerel motor"}
+                      : aiProvider === "webllm"
+                        ? `● Yerel LLM aktif${aiDetail ? ` · ${aiDetail}` : ""}`
+                        : aiProvider === "checking"
+                          ? `● AI bağlanıyor…${aiDetail ? ` ${aiDetail}` : ""}`
+                          : "● Çevrimiçi · yedek motor"}
               </p>            </div>
           </div>
           <div className="hidden items-center gap-3 sm:flex">

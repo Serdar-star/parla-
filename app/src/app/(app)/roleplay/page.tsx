@@ -5,8 +5,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Lightbulb, Send, X } from "lucide-react";
 import { Button, ProgressRing, useToast } from "@/components/ui";
 import { postJson } from "@/lib/api";
+import { clientRoleplayChat, initAiProviders } from "@/lib/ai-client";
 import { ROLEPLAY_CHARACTERS } from "@/lib/groq-client";
-import { groqBrowserChat, loadGroqBridge, type BridgeConfig } from "@/lib/groq-browser";
 import { cn, fireConfetti } from "@/lib/utils";
 type Char = {
   id: string;
@@ -40,62 +40,14 @@ export default function RoleplayPage() {
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
-  const bridgeRef = useRef<BridgeConfig | null>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing]);
 
   useEffect(() => {
-    loadGroqBridge(true)
-      .then((b) => {
-        bridgeRef.current = b;
-      })
-      .catch(() => undefined);
+    void initAiProviders();
   }, []);
-
-  const roleplayViaBrowser = async (
-    character: Char,
-    action: "start" | "message",
-    message?: string,
-    history?: Msg[]
-  ): Promise<string | null> => {
-    try {
-      let bridge = bridgeRef.current;
-      if (!bridge) {
-        bridge = await loadGroqBridge();
-        bridgeRef.current = bridge;
-      }
-      if (!bridge.enabled || !bridge.apiKey) return null;
-
-      const system =
-        action === "start"
-          ? `Sen ${character.name} karakterisin (${character.scenario}). Kısa, doğal ve karaktere uygun ilk mesajı yaz. İngilizce konuş. 2-3 cümle.`
-          : `Sen ${character.name} karakterisin (${character.scenario}). Karaktere sadık kal, kısa ve doğal konuş (2-3 cümle). İngilizce yanıt ver.`;
-
-      const msgs: { role: "system" | "user" | "assistant"; content: string }[] = [{ role: "system", content: system }];
-      if (history) {
-        for (const h of history.slice(-12)) {
-          msgs.push({ role: h.role === "user" ? "user" : "assistant", content: h.content });
-        }
-      }
-      if (action === "message" && message) {
-        // already in history last
-      } else if (action === "start") {
-        msgs.push({ role: "user", content: "Start the conversation now." });
-      }
-
-      const { reply } = await groqBrowserChat({
-        bridge,
-        messages: msgs,
-        temperature: 0.8,
-        maxTokens: 400,
-      });
-      return reply;
-    } catch {
-      return null;
-    }
-  };
 
   const start = async (c: Char) => {
     setSelected(c);
@@ -104,13 +56,13 @@ export default function RoleplayPage() {
     setHints([]);
     setLoading(true);
     try {
-      const browserReply = await roleplayViaBrowser(c, "start");
-      if (browserReply) {
-        setMessages([{ role: "ai", content: browserReply }]);
-        return;
-      }
-      const data = await postJson<{ reply: string }>("/api/ai/roleplay", { character: c.id, action: "start" });
-      setMessages([{ role: "ai", content: data.reply }]);
+      const result = await clientRoleplayChat({
+        characterId: c.id,
+        characterName: c.name,
+        scenario: c.scenario,
+        action: "start",
+      });
+      setMessages([{ role: "ai", content: result.reply }]);
     } catch {
       setMessages([{ role: "ai", content: `Merhaba! Ben ${c.name} ${c.emoji}. ${c.scenario} senaryosuna hoş geldin!` }]);
     } finally {
@@ -127,18 +79,15 @@ export default function RoleplayPage() {
     setTyping(true);
     setShowHints(false);
     try {
-      const browserReply = await roleplayViaBrowser(selected, "message", msg, history);
-      if (browserReply) {
-        setMessages((m) => [...m, { role: "ai", content: browserReply }]);
-        return;
-      }
-      const data = await postJson<{ reply: string }>("/api/ai/roleplay", {
-        character: selected.id,
+      const result = await clientRoleplayChat({
+        characterId: selected.id,
+        characterName: selected.name,
+        scenario: selected.scenario,
         action: "message",
         message: msg,
-        history: history.map((m) => ({ role: m.role === "ai" ? "assistant" : "user", content: m.content })),
+        history,
       });
-      setMessages((m) => [...m, { role: "ai", content: data.reply }]);
+      setMessages((m) => [...m, { role: "ai", content: result.reply }]);
     } catch {
       setMessages((m) => [...m, { role: "ai", content: "Anladım! Devam edelim, bir şey daha söyle." }]);
     } finally {
