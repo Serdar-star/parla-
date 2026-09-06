@@ -88,4 +88,17 @@ echo "[5/5] http://localhost:3000"
 echo "     AI Öğretmen = Groq  |  Müzik/Podcast = DB"
 echo "     Durdurmak: Ctrl+C"
 echo ""
+
+# Tarayıcıyı otomatik aç (3 sn sonra)
+(
+  sleep 3
+  if command -v open >/dev/null 2>&1; then
+    open "http://localhost:3000/dashboard" || true
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "http://localhost:3000/dashboard" || true
+  elif command -v wslview >/dev/null 2>&1; then
+    wslview "http://localhost:3000/dashboard" || true
+  fi
+) &
+
 exec npm run dev

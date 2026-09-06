@@ -107,5 +107,7 @@ echo      http://localhost:3000
 echo      AI Ogretmen = Groq  ^|  Muzik/Podcast = DB
 echo      Durdurmak: Ctrl+C
 echo.
+REM Tarayiciyi bir kez ac (sunucu ayaga kalkinca)
+start "" cmd /c "timeout /t 3 /nobreak >nul & start http://localhost:3000/dashboard"
 call npm run dev
 pause
