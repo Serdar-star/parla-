@@ -321,7 +321,7 @@ const PROBE_TTL_OK = 5 * 60_000;
 const PROBE_TTL_FAIL = 60_000;
 
 /** Groq erişimini hızlıca dener; başarısızsa false. Sonuç kısa süre cache'lenir. */
-export async function probeGroq(timeoutMs = 2500): Promise<boolean> {
+export async function probeGroq(timeoutMs = 1200): Promise<boolean> {
   const key = (process.env.GROQ_API_KEY || "").trim();
   if (!key) return false;
   if (_probeCache) {
@@ -330,7 +330,7 @@ export async function probeGroq(timeoutMs = 2500): Promise<boolean> {
   }
   try {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    const t = setTimeout(() => ctrl.abort(), Math.min(timeoutMs, 1500));
     const res = await fetch("https://api.groq.com/openai/v1/models", {
       headers: { Authorization: `Bearer ${key}` },
       signal: ctrl.signal,

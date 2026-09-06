@@ -57,27 +57,52 @@ export async function groqWithRetry<T>(fn: () => Promise<T>, retries = 3): Promi
   throw lastErr;
 }
 
-/** Model listesini dener; ilki tutmazsa sıradakine geçer */
+function withTimeout<T>(p: Promise<T>, ms: number, label = "groq_timeout"): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(label)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+}
+
+/** Model listesini dener; ilki tutmazsa sıradakine geçer. Toplam bütçe kısa tutulur. */
 export async function groqChatCompletion(opts: {
   messages: { role: "system" | "user" | "assistant"; content: string }[];
   temperature?: number;
   max_tokens?: number;
   models?: readonly string[];
   stream?: false;
+  /** Toplam süre (ms). Sandbox/yavaş ağda UI donmasın. */
+  budgetMs?: number;
 }): Promise<{ content: string; model: string }> {
   const client = getGroqClient();
-  const models = opts.models?.length ? opts.models : GROQ_MODEL_FALLBACKS;
+  const models = (opts.models?.length ? opts.models : GROQ_MODEL_FALLBACKS).slice(0, 2);
+  const budget = opts.budgetMs ?? 4500;
+  const started = Date.now();
   let lastErr: unknown;
   for (const model of models) {
+    if (Date.now() - started > budget) break;
+    const perTry = Math.max(800, budget - (Date.now() - started));
     try {
-      const completion = await groqWithRetry(() =>
+      const completion = await withTimeout(
+        // retry yok — bağlantı hatasında hemen yedek
         client.chat.completions.create({
           model,
           messages: opts.messages,
           temperature: opts.temperature ?? 0.7,
           max_tokens: opts.max_tokens ?? 800,
           stream: false,
-        })
+        }),
+        perTry,
+        `groq_timeout_${model}`
       );
       const content = completion.choices?.[0]?.message?.content?.trim() || "";
       if (content) return { content, model };
@@ -85,7 +110,7 @@ export async function groqChatCompletion(opts: {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("401") || msg.includes("403") || msg.includes("Invalid API")) throw err;
-      // 404 model / 400 → sıradaki model
+      // connection / timeout / 404 → sıradaki veya local
       continue;
     }
   }

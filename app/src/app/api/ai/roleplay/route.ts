@@ -58,7 +58,9 @@ export async function POST(req: Request) {
       /* ignore */
     }
 
-    const groqUp = hasGroqKey();
+    // Sandbox'ta Groq yoksa anında local character — UI donmasın
+    const { probeGroq } = await import("@/lib/ai-local");
+    const groqUp = hasGroqKey() && (await probeGroq(800));
 
     if (action === "start") {
       if (groqUp) {

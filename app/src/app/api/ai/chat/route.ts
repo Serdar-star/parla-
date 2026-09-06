@@ -95,8 +95,8 @@ export async function POST(req: Request) {
     const useStreaming = stream || req.headers.get("accept")?.includes("text/event-stream");
 
     const keyOk = hasGroqKey();
-    // Key varsa dene — probe başarısız olsa bile bir kez gerçek çağrı dene (bazı ağlarda probe farklı)
-    const shouldTryGroq = keyOk;
+    // Sadece ağ gerçekten açıksa Groq dene — sandbox'ta probe false → anında local (ms)
+    const shouldTryGroq = keyOk && (await probeGroq(800));
 
     if (shouldTryGroq) {
       const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
@@ -171,7 +171,8 @@ export async function POST(req: Request) {
           const { content: reply, model } = await groqChatCompletion({
             messages,
             temperature: 0.7,
-            max_tokens: 800,
+            max_tokens: 500,
+            budgetMs: 4000,
           });
           await db.insert(aiConversations).values({
             userId: user.id,

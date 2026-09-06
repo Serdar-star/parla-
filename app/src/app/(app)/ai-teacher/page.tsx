@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { BookOpen, Check, GraduationCap, Languages, MessageSquareText, Mic, Send, Sparkles, Wand2, X, Zap } from "lucide-react";
 import { Badge, useToast } from "@/components/ui";
 import { useApp } from "@/stores/app";
-import { clientAiChat, initAiProviders, subscribeWebLlm, type AiProvider } from "@/lib/ai-client";
+import { clientAiChat, initAiProviders, type AiProvider } from "@/lib/ai-client";
 import { cn, fireConfetti, greeting } from "@/lib/utils";
 /* ══════════════════════════════ LUMEN AVATAR ═════════════════════════════ */
 
@@ -220,29 +220,24 @@ export default function AiTeacherPage() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing]);
 
-  // Groq (tarayıcı) → WebLLM → yedek
+  // Hızlı AI init — max ~3 sn, asla "Bağlanıyor"da takılmaz
   useEffect(() => {
     let cancelled = false;
+    const safety = setTimeout(() => {
+      if (!cancelled) setAiProvider((p) => (p === "checking" ? "local" : p));
+    }, 3500);
     void initAiProviders((p, detail) => {
       if (cancelled) return;
       setAiProvider(p);
       if (detail) setAiDetail(detail);
-    });
-    const unsub = subscribeWebLlm((s) => {
-      if (cancelled) return;
-      if (s.state === "loading") {
-        setAiDetail(s.text || `Model %${Math.round((s.progress || 0) * 100)}`);
-        setAiProvider((prev) => (prev === "groq" ? prev : "checking"));
-      } else if (s.state === "ready") {
-        setAiProvider((prev) => (prev === "groq" ? prev : "webllm"));
-        setAiDetail(s.modelId);
-      } else if (s.state === "error") {
-        setAiDetail(s.message);
+    }).finally(() => {
+      if (!cancelled) {
+        setAiProvider((p) => (p === "checking" ? "local" : p));
       }
     });
     return () => {
       cancelled = true;
-      unsub();
+      clearTimeout(safety);
     };
   }, []);
   useEffect(() => {
@@ -289,27 +284,37 @@ export default function AiTeacherPage() {
     }
 
     setTyping(true);
-    (async () => {
-      const historyForAi = messages
-        .filter((m) => !m.scene && !m.quiz)
-        .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("ai" as const), content: m.text }));
+    const turn = userTurns;
+    const historyForAi = messages
+      .filter((m) => !m.scene && !m.quiz)
+      .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("ai" as const), content: m.text }));
 
+    // Hard cap: 6 sn içinde mutlaka cevap (milisaniye hedefi sunucu/local)
+    const hardCap = new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000));
+
+    void (async () => {
       try {
-        const result = await clientAiChat({ message: text, mode: mode.id, history: historyForAi });
+        const result = await Promise.race([
+          clientAiChat({ message: text, mode: mode.id, history: historyForAi }),
+          hardCap.then(() => {
+            throw new Error("hard_cap");
+          }),
+        ]);
         setTyping(false);
         setAiProvider(result.provider);
         idRef.current += 1;
         setMessages((m) => [...m, { id: idRef.current, role: "ai", text: result.reply }]);
-        return;
       } catch (err) {
         console.warn("AI chain failed:", err);
+        setTyping(false);
+        setAiProvider("local");
+        const fallback = aiReply(text, mode.id, null, turn, 0);
+        idRef.current += 1;
+        setMessages((m) => [
+          ...m,
+          { id: idRef.current, role: "ai", text: fallback.text, correction: fallback.correction },
+        ]);
       }
-
-      setTyping(false);
-      setAiProvider("local");
-      const fallback = aiReply(text, mode.id, null, userTurns, 0);
-      idRef.current += 1;
-      setMessages((m) => [...m, { id: idRef.current, role: "ai", text: fallback.text, correction: fallback.correction }]);
     })();
   };
   const answerQuiz = (msg: ChatMsg, optionIdx: number) => {

@@ -26,7 +26,8 @@ export async function GET() {
     }
 
     const demo = process.env.DEMO_MODE === "on" || process.env.DEMO_MODE === "true" || process.env.DEMO_MODE !== "off";
-    const serverReachable = await probeGroq(2000);
+    // Bridge'i hızlı tut — probe max 1.2s (UI "Bağlanıyor"da takılmasın)
+    const serverReachable = await probeGroq(1200);
 
     // Sunucu zaten Groq'a çıkabiliyorsa köprüye gerek yok (key sızdırma)
     if (serverReachable && process.env.DEMO_MODE === "off") {
