@@ -1,68 +1,79 @@
-# Turso + Müzik / Podcast — ne çalışır, ne zaman?
+# Turso — sandbox’ta gerçekten çalışıyor
 
 ## Kısa cevap
 
-| Ortam | Veritabanı | Müzik / Podcast | Groq AI |
-|--------|------------|-----------------|---------|
-| **Arena sandbox (şimdi)** | Yerel SQLite `file:.data/parla.db` ✅ | ✅ (seed’li) | ❌ ağ engeli |
-| **Kendi PC** | Aynı SQLite veya Turso ✅ | ✅ | ✅ |
-| **Vercel + Turso** | Turso bulut ✅ | ✅ | ✅ |
+| Ortam | Veritabanı | Komut |
+|--------|------------|--------|
+| **Arena sandbox** | **Yerel Turso (`sqld`)** `http://127.0.0.1:8080` ✅ | `npm run turso:local` |
+| **Kendi PC** | Aynı sqld veya dosya veya cloud ✅ | `npm run turso:local` / cloud env |
+| **Vercel** | Turso Cloud `libsql://…` ✅ | env + seed (PC/CI) |
 
-**Turso bulutuna sandbox’tan bağlanılamıyor** (`turso.io` TLS kapalı).  
-Ama **aynı kod + aynı tablolar** zaten yerelde dolu: şarkı, podcast, haber.
+Cloud `turso.io` sandbox’tan **ulaşılmaz** (TLS engeli).  
+Bunun yerine **aynı motor** çalışıyor: **libSQL server (`sqld`)** — Turso’nun açık kaynak sunucusu, HTTP + Hrana WS.
 
-Sandbox’ta “gerçek çalışan DB” = **lokal libSQL dosyası**.  
-Production’da sadece URL’i Turso’ya çevirirsin — kod değişmez.
+```text
+Uygulama  →  @libsql/client  →  http://127.0.0.1:8080 (sqld)  →  .data/sqld-data
+                 aynı client        production’da:
+                              →  libsql://xxx.turso.io + token
+```
+
+Kod: `app/src/db/index.ts` — `file:` / `http:` / `libsql://` hepsi aynı Drizzle yolu.
 
 ---
 
-## Şu an içerik (seed)
-
-Uygulama ayaktayken:
-
-- `/music` — şarkılar (söz + TR + kelime + YouTube karaoke)
-- `/podcast` — podcast’ler (transcript + quiz)
-- `/news` — haberler (simple / medium / original)
-
-API:
-
-```text
-GET /api/content/songs
-GET /api/content/podcasts
-GET /api/content/news
-```
-
-Yeniden doldurmak:
+## Sandbox’ta ayağa kaldırma
 
 ```bash
 cd app
-export DATABASE_URL=file:.data/parla.db
-npx drizzle-kit push
-npm run db:seed
+npm run turso:local          # sqld + schema + seed
+# ayrı terminal:
+npm run dev                  # .env DATABASE_URL=http://127.0.0.1:8080
+# veya tek komut:
+npm run dev:turso
 ```
+
+Script: `scripts/start-turso-local.sh`  
+Binary: ilk seferde npm’den `@sqld/linux-x64` iner → `tools/bin/sqld`  
+Schema: `scripts/parla-schema.sql`
+
+Portlar:
+
+- **8080** — HTTP (Hrana over HTTP) ← `DATABASE_URL`
+- **8081** — Hrana WebSocket
 
 ---
 
-## Turso’yu ne zaman ekleyeceksin? (en sonda)
+## İçerik (seed sonrası)
 
-1. https://turso.tech → hesap → Create Database  
-2. URL al: `libsql://parla-xxx.turso.io`  
-3. Token al: `turso db tokens create ...`  
-4. Vercel (veya PC `.env.local`) env:
+| Tablo | Adet |
+|--------|------|
+| songs | 18 |
+| podcasts | 14 |
+| news_articles | 12 |
+| vocabulary | 332 |
+| lessons | 15 |
+
+Sayfalar: `/music` · `/podcast` · `/news`  
+API: `GET /api/content/songs|podcasts|news`
+
+Admin: `zeynepkaya@ornek.com` / `demo1234`
+
+---
+
+## Production Turso Cloud
+
+1. https://turso.tech → DB oluştur  
+2. Env:
 
 ```env
 DATABASE_URL=libsql://parla-xxx.turso.io
-# veya
-TURSO_DATABASE_URL=libsql://parla-xxx.turso.io
 TURSO_AUTH_TOKEN=eyJ...
-
 GROQ_API_KEY=gsk_...
 JWT_SECRET=uzun-gizli
 DEMO_MODE=on
-NEXT_PUBLIC_APP_URL=https://senin-app.vercel.app
 ```
 
-5. Bir kez migrate/seed (PC veya CI’dan, sandbox’tan değil):
+3. PC/CI’dan (sandbox cloud’a çıkamaz):
 
 ```bash
 export DATABASE_URL=libsql://...
@@ -71,26 +82,14 @@ npx drizzle-kit push
 npm run db:seed
 ```
 
-Kod yolu zaten hazır: `src/db/index.ts` hem `file:` hem `libsql://` destekler.
-
 ---
 
-## Neden sandbox’ta Turso “ekleyemiyoruz”?
+## Dosya modu (yedek)
 
+sqld yoksa hâlâ:
+
+```env
+DATABASE_URL=file:.data/parla.db
 ```
-sandbox → turso.io:443 → SSL kesiliyor (Groq ile aynı engel)
-sandbox → file:.data/parla.db → tam çalışıyor
-```
 
-Yani Turso’yu “sandbox içinde buluta bağlamak” imkânsız;  
-**içerik ve tablolar zaten yerelde gerçekten çalışıyor.**  
-En sonda Turso = aynı veriyi buluta taşımak.
-
----
-
-## Ne eklemeye gerek yok?
-
-- Ayrı bir “Turso sadece sandbox” kurulumu  
-- Müzik için ayrı sunucu (YouTube embed + sözler DB’de)
-
-İçeriği çoğaltmak için: `src/data/content.ts` → `npm run db:seed`.
+Aynı seed, aynı tablolar — sadece gömülü dosya, sunucu yok.

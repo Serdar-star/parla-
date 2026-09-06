@@ -1,0 +1,6 @@
+tools/bin/
+tools/node_modules/
+tools/package.json
+tools/package-lock.json
+*.log
+.DS_Store

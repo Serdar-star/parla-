@@ -13,7 +13,9 @@
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/lib/seed.ts",
     "setup": "drizzle-kit push && tsx src/lib/seed.ts",
-    "dev:ready": "npm run setup && npm run dev"
+    "dev:ready": "npm run setup && npm run dev",
+    "turso:local": "bash ../scripts/start-turso-local.sh",
+    "dev:turso": "bash ../scripts/start-turso-local.sh && next dev -H 0.0.0.0 -p 3000"
   },
   "dependencies": {
     "@fontsource-variable/fredoka": "^5.3.0",
